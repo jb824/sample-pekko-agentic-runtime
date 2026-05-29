@@ -1,0 +1,40 @@
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build
+
+
+# Gradle
+.gradle/
+build/
+**/build/
+# IDEs
+.idea/
+*.iml
+.vscode/
+# Java/JVM
+*.class
+*.jar
+*.war
+*.ear
+hs_err_pid*
+replay_pid*
+# Local env and secrets
+.env
+.env.*
+!.env.example
+# Python/vLLM local envs
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*~
+
+# Local benchmark/output artifacts
+.benchmarks/
