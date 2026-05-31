@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pekko News Summaries</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --ink: #10213a;
+      --muted: #607089;
+      --line: #d5e0ef;
+      --accent: #0b6bcb;
+      --ok: #0f766e;
+      --err: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(circle at 10% 20%, #dbeafe 0%, var(--bg) 40%);
+    }
+    .shell {
+      max-width: 1100px;
+      margin: 32px auto;
+      padding: 0 16px;
+      display: grid;
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 12px 28px rgba(16, 33, 58, 0.08);
+    }
+    h1 { margin: 0 0 12px 0; font-size: 24px; }
+    h2 { margin: 0 0 10px 0; font-size: 16px; }
+    .sub { color: var(--muted); margin: 0 0 16px 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 14px;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }
+    th { font-size: 12px; color: var(--muted); letter-spacing: 0.03em; text-transform: uppercase; }
+    td { font-size: 14px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .status-ok { color: var(--ok); font-weight: 600; }
+    .status-err { color: var(--err); font-weight: 600; }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <section class="card">
+    <h1>Agent Summary Console</h1>
+    <p class="sub">Quarkus + HTMX UI for publishing inbound articles and viewing Cassandra projections.</p>
+
+    <form class="grid"
+          hx-get="/ui/summaries"
+          hx-target="#summary-rows"
+          hx-trigger="change delay:250ms, submit"
+          hx-include="#tenantId,#limit">
+      <div>
+        <label for="tenantId">Tenant ID</label>
+        <input id="tenantId" name="tenantId" value="{tenantId}">
+      </div>
+      <div>
+        <label for="limit">Limit</label>
+        <input id="limit" name="limit" type="number" min="1" max="200" value="{limit}">
+      </div>
+      <div>
+        <button type="submit">Refresh Summaries</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Publish Guardian Webhook Event</h2>
+    <form class="grid"
+          hx-post="/ui/webhook"
+          hx-target="#webhook-result"
+          hx-swap="innerHTML">
+      <div>
+        <label for="wh-tenant">Tenant ID</label>
+        <input id="wh-tenant" name="tenantId" value="{tenantId}">
+      </div>
+      <div>
+        <label for="wh-article">Article ID</label>
+        <input id="wh-article" name="articleId" placeholder="world/2026/example">
+      </div>
+      <div>
+        <label for="wh-title">Title</label>
+        <input id="wh-title" name="title" placeholder="Example headline">
+      </div>
+      <div>
+        <label for="wh-url">URL</label>
+        <input id="wh-url" name="url" placeholder="https://www.theguardian.com/...">
+      </div>
+      <div>
+        <button type="submit">Publish</button>
+      </div>
+    </form>
+    <div id="webhook-result" class="sub"></div>
+  </section>
+
+  <section class="card">
+    <h2>Latest Summaries</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Created</th>
+        <th>Article</th>
+        <th>Confidence</th>
+        <th>Summary</th>
+      </tr>
+      </thead>
+      <tbody id="summary-rows"
+             hx-get="/ui/summaries?tenantId={tenantId}&limit={limit}"
+             hx-trigger="load, every 15s"
+             hx-swap="innerHTML">
+      {#if summaries.isEmpty}
+      <tr>
+        <td colspan="4" class="mono">No summaries found.</td>
+      </tr>
+      {#else}
+      {#for row in summaries}
+      <tr>
+        <td class="mono">{row.createdAt}</td>
+        <td class="mono">{row.articleId}</td>
+        <td>{row.confidence}</td>
+        <td>{row.summary}</td>
+      </tr>
+      {/for}
+      {/if}
+      </tbody>
+    </table>
+  </section>
+</div>
+</body>
+</html>

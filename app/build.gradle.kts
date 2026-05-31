@@ -26,9 +26,13 @@ dependencies {
 
     implementation(platform("org.apache.pekko:pekko-bom_2.13:1.6.0"))
     implementation("org.apache.pekko:pekko-actor-typed_2.13")
+    implementation("org.apache.pekko:pekko-stream_2.13")
     implementation("org.apache.pekko:pekko-slf4j_2.13")
+    implementation("org.apache.pekko:pekko-connectors-kafka_2.13:1.1.0")
     implementation("dev.langchain4j:langchain4j-ollama:1.15.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.19.2")
+    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.19.2")
+    implementation("org.apache.kafka:kafka-clients:3.8.1")
     implementation("com.google.protobuf:protobuf-java:4.32.1")
     implementation("ai.djl.huggingface:tokenizers:0.35.0")
     implementation("io.grpc:grpc-netty-shaded:1.76.0")

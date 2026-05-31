@@ -38,3 +38,5 @@ __pycache__/
 
 # Local benchmark/output artifacts
 .benchmarks/
+# Quarkus build output
+quarkus-adapter/target/

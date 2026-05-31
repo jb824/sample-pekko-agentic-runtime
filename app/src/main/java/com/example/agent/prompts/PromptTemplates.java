@@ -8,13 +8,13 @@ public final class PromptTemplates {
         return """
                 You are a careful research assistant.
 
-                Research the following topic:
+                Summarize news article and provide cause-effect analysis:
                 %s
 
                 Return:
-                1. A concise explanation
-                2. Key design implications
-                3. Risks or caveats
+                1. A concise summary (when, who, where, why, and how).
+                2. Key implications from news article.
+                3. Possible global effects resulting from news.
                 4. A short recommendation
 
                 Keep the answer grounded and practical.
@@ -74,8 +74,17 @@ public final class PromptTemplates {
             String observations
     ) {
         return """
-                You are controlling a bounded tool-using agent loop.
+                You are a careful research assistant.
 
+                Summarize news article and provide cause-effect analysis:
+                
+                Return:
+                1. A concise summary (when, who, where, why, and how).
+                2. Key implications from news article.
+                3. Possible global effects resulting from news.
+                4. A short recommendation
+
+              
                 User request:
                 %s
 
@@ -94,7 +103,7 @@ public final class PromptTemplates {
                 query=<|short query or input|>
 
                 FINAL
-                <|concise final answer|>
+                answer=<|final answer|>
 
                 Rules:
                 - Do not use JSON.
@@ -102,29 +111,8 @@ public final class PromptTemplates {
                 - Do not call tools outside the allowed list.
                 - Use FINAL when you have enough information.
                 - If observations contain URL fields, include exact URLs in FINAL sources.
+                - If tool request failed, continue without tool and explain failed attempt.
                 """.formatted(request, allowedTools, observations, stepNumber, maxSteps);
     }
 
-    public static String reactFinalPrompt(String request, String observations) {
-        return """
-                You are finishing a bounded tool-using agent loop.
-
-                User request:
-                %s
-
-                Observations:
-                %s
-
-                Return exactly:
-
-                FINAL
-                <concise final answer>
-
-                Rules:
-                - Do not call another tool.
-                - Do not use ACTION.
-                - Use the observations directly.
-                - If observations contain URL fields, include exact URLs in FINAL sources.
-                """.formatted(request, observations);
-    }
 }

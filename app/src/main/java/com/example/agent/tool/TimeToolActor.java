@@ -1,28 +1,32 @@
 package com.example.agent.tool;
 
+import com.example.agent.tool.service.ToolService;
 import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.AbstractBehavior;
 import org.apache.pekko.actor.typed.javadsl.ActorContext;
 import org.apache.pekko.actor.typed.javadsl.Behaviors;
 import org.apache.pekko.actor.typed.javadsl.Receive;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-
 public final class TimeToolActor extends AbstractBehavior<ToolProtocol.Command> {
     public static final String TOOL_NAME = "time.now";
 
-    private final Clock clock;
+    private final ToolService toolService;
 
     public static Behavior<ToolProtocol.Command> create() {
-        return Behaviors.setup(context -> new TimeToolActor(context, Clock.systemUTC()));
+        return Behaviors.setup(context -> new TimeToolActor(context));
     }
 
-    private TimeToolActor(ActorContext<ToolProtocol.Command> context, Clock clock) {
+    public static Behavior<ToolProtocol.Command> create(ToolService toolService) {
+        return Behaviors.setup(context -> new TimeToolActor(context, toolService));
+    }
+
+    private TimeToolActor(ActorContext<ToolProtocol.Command> context) {
+        this(context, new DefaultToolWiring().timeToolService());
+    }
+
+    private TimeToolActor(ActorContext<ToolProtocol.Command> context, ToolService toolService) {
         super(context);
-        this.clock = clock;
+        this.toolService = toolService;
     }
 
     @Override
@@ -33,11 +37,8 @@ public final class TimeToolActor extends AbstractBehavior<ToolProtocol.Command> 
     }
 
     private Behavior<ToolProtocol.Command> onInvokeTool(ToolProtocol.InvokeTool command) {
-        String zone = command.arguments().getOrDefault("zone", "UTC");
         try {
-            ZoneId zoneId = ZoneId.of(zone);
-            Instant now = clock.instant();
-            String output = DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(now.atZone(zoneId));
+            String output = toolService.execute(command.arguments());
             getContext().getLog().info("Tool {} invoked for request {}", command.toolName(), command.requestId());
             command.replyTo().tell(new ToolProtocol.ToolResult(
                     command.requestId(),
@@ -45,7 +46,7 @@ public final class TimeToolActor extends AbstractBehavior<ToolProtocol.Command> 
                     output,
                     null
             ));
-        } catch (RuntimeException exception) {
+        } catch (Exception exception) {
             command.replyTo().tell(new ToolProtocol.ToolResult(
                     command.requestId(),
                     command.toolName(),

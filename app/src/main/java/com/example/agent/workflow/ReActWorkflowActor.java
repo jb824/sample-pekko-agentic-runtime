@@ -405,12 +405,13 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
     }
 
     private Behavior<Command> requestFinalStep() {
-        if (finalOnly || stepNumber >= maxSteps) {
+        if (finalOnly) {
             return finishFromObservations();
         }
 
         finalOnly = true;
-        stepNumber++;
+        int nextStep = Math.min(stepNumber + 1, maxSteps);
+        stepNumber = Math.max(stepNumber, nextStep);
         ActorRef<LlmProtocol.Response> responseAdapter = getContext().messageAdapter(
                 LlmProtocol.Response.class,
                 WrappedLlmResponse::new
@@ -425,7 +426,13 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
         );
         llmWorker.tell(new LlmProtocol.Ask(
                 request.requestId() + ":react:final",
-                PromptTemplates.reactFinalPrompt(request.input(), observationsText()),
+                PromptTemplates.reactPrompt(
+                        request.input(),
+                        allowedToolsText(),
+                        stepNumber,
+                        maxSteps,
+                        observationsText()
+                ),
                 responseAdapter
         ));
         return this;
@@ -578,7 +585,7 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
             String key = normalized.substring(0, equals).trim().toLowerCase();
             String value = normalized.substring(equals + 1).trim();
             if ("tool".equals(key)) {
-                toolName = value.toLowerCase().replace("\"", "");
+                toolName = normalizeToolName(value);
             } else if ("query".equals(key) || "input".equals(key)) {
                 query = value;
             }
@@ -592,6 +599,19 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
         }
         String compacted = value.strip();
         return compacted.length() <= 1600 ? compacted : compacted.substring(0, 1600) + "...";
+    }
+
+    private static String normalizeToolName(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.toLowerCase()
+                .replace("\"", "")
+                .replace("'", "")
+                .replace("<", "")
+                .replace(">", "")
+                .replace("|", "")
+                .trim();
     }
 
     private static List<String> sourceUrls(String toolOutput) {

@@ -1,6 +1,7 @@
 package com.example.agent.tool;
 
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -20,7 +21,9 @@ public final class ToolCatalog {
                 .filter(toolName -> !"none".equals(toolName))
                 .filter(toolName -> !"null".equals(toolName))
                 .filter(ToolCatalog::isKnownTool)
-                .collect(Collectors.toList());
+                .collect(Collectors.toCollection(LinkedHashSet::new))
+                .stream()
+                .toList();
     }
 
     public static String promptDescription(String toolName) {
