@@ -9,9 +9,14 @@ public record SummaryRecord(
         String articleId,
         String workflowId,
         String sourceEventId,
+        String source,
+        String processingStatus,
         String summary,
         String topics,
         String confidence,
         Instant createdAt
 ) {
+    public String sourceRecordId() {
+        return sourceEventId;
+    }
 }

@@ -1,466 +1,568 @@
 # AGENT.md — Working Memory for Pekko LLM Agent Runtime
 
-**Memory role:** this file is **working memory** for the current Pekko + LangChain4j + Ollama agent-runtime project.
+Purpose: current project state for Codex/agent harnesses. Keep this file factual, short-lived, and implementation-specific.
 
-Use this file to recover the live state of the project between sessions. Keep reusable build procedure, architectural patterns, best practices, and anti-patterns in `.agents/skills/pekko-llm-agent-runtime/SKILL.md`.
-
-```text
-.agents/skills/pekko-llm-agent-runtime/SKILL.md = procedural memory / reusable skill
-AGENT.md                                           = working memory / current project state
-```
+- Durable procedures and patterns belong in `.agents/skills/**/SKILL.md`.
+- This file is working memory: current objective, repo shape, decisions, known issues, and next steps.
+- When implementation state changes, update this file in the same PR/commit.
 
 ---
 
-## 1. Current Objective
+## 1) Current Objective
 
-Build a small local prototype of an LLM agent runtime using:
+Implement Google-source ingestion into the existing event-driven agent runtime.
 
-- Apache Pekko Typed for actor orchestration
-- LangChain4j as the LLM harness
-- Ollama as the default local model server
-- vLLM as an OpenAI-compatible local model server option
-- Java 21 and Gradle for the first implementation
+Near-term sources:
 
-Initial target behavior:
+1. **Google Business Profile (GBP)** reviews/updates
+2. **YouTube** comments/engagement updates
+
+Current target pipeline:
 
 ```text
-User request
-  -> Main bootstrap
-  -> GatewayActor
-  -> ResearchWorkflowActor or PlannerExecutorWorkflowActor
-  -> LlmWorkerActor
-  -> LangChain4j ChatModel
-  -> local Ollama or vLLM model server
-  -> final response
+Google source/mock source
+  -> Quarkus ingest adapter
+  -> Kafka topic: agent.commands.v1
+  -> Pekko runtime
+  -> Kafka topic: agent.workflow.events.v1
+  -> Quarkus projection
+  -> Cassandra/UI
 ```
+
+For the first pass, prefer **mock Google events** over real Google account integration. Do not create fake/dummy Google Business Profiles for testing. Move to real OAuth/GBP only with a real eligible profile or approved client account.
 
 ---
 
-## 2. Current Implementation Stage
+## 2) Current System Snapshot
 
-Status: **MVP actor runtime implemented with research and planner/executor workflows**.
+Runtime stack:
 
-Current milestone:
+- Java 21
+- Gradle for Pekko app
+- Maven wrapper for `quarkus-adapter`
+- Pekko Typed actor runtime
+- LangChain4j LLM harness
+- LLM backends: Ollama default, vLLM, vLLM gRPC
+- Kafka as durable event boundary
+- Quarkus adapter for ingestion, projection, and UI
+- Cassandra for current summary/read-model storage
 
-```text
-Run one local request through a single-node Pekko actor system and receive one Ollama-backed LLM response.
-```
+Current Pekko workflows:
 
-Success criteria:
+- `research`
+- `planner-executor`
+- `react`
 
-- `./gradlew run` starts one Pekko `ActorSystem`.
-- The runtime submits one test request.
-- The workflow actor sends one prompt to the LLM worker.
-- The LLM worker calls Ollama through LangChain4j.
-- The actor dispatcher is not blocked by the LLM call.
-- The workflow returns or logs a final response.
-- The actor system shuts down cleanly.
+Current tools exposed to workflows:
 
----
+- `time.now`
+- `web.search`
+- `arxiv.search`
+- `pubmed.search`
 
-## 3. Active Architecture Decision
+Current source adapters already present:
 
-Use **single-node Pekko Typed first**.
-
-Do not add cluster sharding, persistence, vector search, Kubernetes, tenant partitioning, or streaming until the simple local runtime works.
-
-Current actor shape:
-
-```text
-RootActor / Main
-  └── LlmWorkerActor
-  └── ToolRegistryActor
-        └── TimeToolActor
-        └── WebSearchToolActor
-        └── ArxivSearchToolActor
-  └── GatewayActor
-        └── ResearchWorkflowActor, created per request when AGENT_WORKFLOW=research
-        └── PlannerExecutorWorkflowActor, created per request when AGENT_WORKFLOW=planner-executor
-```
-
-Current default workflow is `planner-executor`. Use `AGENT_WORKFLOW=research` to route through the one-shot research workflow.
-
-Planner/executor actor shape:
-
-```text
-RootActor / Main
-  └── LlmWorkerActor
-  └── ToolRegistryActor
-  └── GatewayActor
-  └── PlannerExecutorWorkflowActor
-        ├── planner step
-        ├── configured tool steps via AGENT_TOOLS
-        └── executor step
-```
+- Guardian webhook/poller
+- Hacker News poller
 
 ---
 
-## 4. Runtime Requirements
+## 3) Boundary Ownership
 
-Expected local requirements:
+Quarkus adapter owns:
+
+- external API auth/OAuth/secrets handling
+- Google token storage/refresh
+- webhooks, Pub/Sub subscribers, and pollers
+- source payload validation and normalization
+- publication to Kafka input topic
+- output projection persistence
+- UI/API endpoints
+
+Pekko runtime owns:
+
+- workflow orchestration
+- ReAct/planner/research execution
+- tool invocation through tool actors
+- bounded LLM reasoning steps
+- internal actor lifecycle/supervision
+- output event emission
+
+Kafka owns:
+
+- durable inbound commands/events
+- durable workflow output events
+- replay/integration boundary
+
+Cassandra owns:
+
+- queryable read model for UI/API
+
+Do not move Google-specific API clients into Pekko workflow actors.
+
+---
+
+## 4) Layering Constraint
+
+For tools in the `app` module:
+
+```text
+workflow/agent actor
+  -> tool actor
+  -> ToolService
+  -> adapter/API client
+```
+
+Rules:
+
+- Agents/workflows do not call external APIs directly.
+- Tool actors stay thin.
+- Adapter implementations are injected through `ToolWiring`.
+- Long-running or synchronous calls must not block the default actor dispatcher.
+
+---
+
+## 5) Google Dependency Direction
+
+Use generated Google API clients for YouTube/GBP APIs, modern Google Auth for credentials, and Google Cloud libraries only for Cloud infrastructure such as Pub/Sub.
+
+### Maven dependency direction
+
+```xml
+<dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>com.google.cloud</groupId>
+      <artifactId>libraries-bom</artifactId>
+      <version>26.83.0</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+  </dependencies>
+</dependencyManagement>
+
+<dependencies>
+  <!-- YouTube Data API generated client -->
+  <dependency>
+    <groupId>com.google.apis</groupId>
+    <artifactId>google-api-services-youtube</artifactId>
+    <version>v3-rev20260525-2.0.0</version>
+  </dependency>
+
+  <!-- Google Business Profile generated clients -->
+  <dependency>
+    <groupId>com.google.apis</groupId>
+    <artifactId>google-api-services-mybusinessaccountmanagement</artifactId>
+    <version>v1-rev20260512-2.0.0</version>
+  </dependency>
+
+  <dependency>
+    <groupId>com.google.apis</groupId>
+    <artifactId>google-api-services-mybusinessbusinessinformation</artifactId>
+    <version>v1-rev20260426-2.0.0</version>
+  </dependency>
+
+  <!-- Generated Google API client plumbing -->
+  <dependency>
+    <groupId>com.google.api-client</groupId>
+    <artifactId>google-api-client</artifactId>
+    <version>2.9.0</version>
+  </dependency>
+
+  <!-- Preferred modern Google auth library -->
+  <dependency>
+    <groupId>com.google.auth</groupId>
+    <artifactId>google-auth-library-oauth2-http</artifactId>
+    <version>1.47.0</version>
+  </dependency>
+
+  <!-- Google Cloud Pub/Sub for GBP notifications -->
+  <dependency>
+    <groupId>com.google.cloud</groupId>
+    <artifactId>google-cloud-pubsub</artifactId>
+  </dependency>
+</dependencies>
+```
+
+Notes:
+
+- Do not add `google-api-client-appengine` unless deploying to an App Engine-specific runtime that requires it.
+- Re-check generated API client versions before committing dependency updates.
+- For YouTube, start with comment polling via `commentThreads.list` unless a better push source is intentionally added.
+- For GBP reviews, Pub/Sub notifications can signal new/updated reviews, but the adapter should hydrate full review/resource data before publishing a normalized internal event.
+
+---
+
+## 6) Canonical Inbound Event Contract
+
+All source adapters must map into one Pekko entry contract. Do not create separate Pekko-bound event formats per source.
+
+Minimum fields:
+
+```json
+{
+  "eventId": "stable-id",
+  "eventType": "SourceItemReceived",
+  "eventVersion": 1,
+  "tenantId": "tenant-id",
+  "source": "guardian|hackernews|google-business-profile|youtube|mock-google",
+  "sourceRecordId": "source-native-record-id",
+  "occurredAt": "ISO-8601 timestamp",
+  "payload": {}
+}
+```
+
+Required source-specific stable IDs:
+
+- Guardian: article/content ID or URL hash
+- Hacker News: item ID
+- GBP: account ID + location ID + review/resource ID
+- YouTube: channel/video/comment/commentThread ID
+
+Target delivery semantics:
+
+- at-least-once ingest
+- idempotent handling by `eventId` + source record IDs
+- no silent failure swallowing
+
+---
+
+## 7) Google Iteration Scope
+
+### 7.1 Phase 0 — Mock-first integration
+
+Implement mock Google inbound events first:
+
+- mock GBP review received/updated
+- mock YouTube comment received/updated
+- publish to `agent.commands.v1`
+- verify Pekko workflow execution
+- verify projection to Cassandra/UI
+
+### 7.2 Phase 1 — Google auth foundation
+
+Implement in Quarkus:
+
+- OAuth config and redirect/callback flow or admin-provided refresh-token path
+- credential storage abstraction
+- token refresh using `google-auth-library-oauth2-http`
+- no token logging
+- no checked-in credentials
+
+### 7.3 Phase 2 — GBP ingest
+
+Implement in Quarkus:
+
+- account/location discovery
+- review listing/hydration
+- optional Pub/Sub notification receiver/subscriber
+- normalized internal event publisher
+
+Important constraint: real GBP testing requires a real eligible Business Profile or approved client account. Do not create dummy profiles.
+
+### 7.4 Phase 3 — YouTube ingest
+
+Implement in Quarkus:
+
+- channel/video scope discovery
+- comment/comment-thread polling
+- watermarking by time/page token/source ID
+- normalized internal event publisher
+
+### 7.5 Phase 4 — Projection/UI visibility
+
+Extend UI/API with:
+
+- source type
+- source record ID
+- processing status
+- workflow ID
+- generated output
+- failure reason if present
+
+---
+
+## 8) Kafka Topics
+
+Current topics:
+
+```text
+agent.commands.v1
+agent.workflow.events.v1
+```
+
+Possible later topics:
+
+```text
+agent.dead-letter.v1
+agent.tenant-usage.events.v1
+agent.memory-updates.v1
+```
+
+Rules:
+
+- Kafka is the durable boundary, not internal actor messaging.
+- Pekko internal agent-to-agent communication remains typed actor messages.
+- Producers: Quarkus ingest adapter, Pekko output publisher, test publishers.
+- Consumers: Pekko Kafka runtime, Quarkus projection service, future audit/billing/memory consumers.
+
+---
+
+## 9) Known Runtime Issue To Watch
+
+Observed/likely issue:
+
+```text
+ToolTimeout dead letters after ReActWorkflowActor termination
+```
+
+Interpretation:
+
+- A workflow actor likely completed/stopped while a tool timeout message was still scheduled.
+
+Preferred fix:
+
+- Use `Behaviors.withTimers` for actor-owned timers.
+- Use unique timer keys per tool call.
+- Cancel timer when tool result arrives.
+- Ignore stale timeout/result messages defensively.
+- Stop workflow only after required output publishing/cleanup is done.
+
+Do not silence dead-letter logging until lifecycle behavior is understood.
+
+---
+
+## 10) Local Runtime Requirements
+
+Expected local services:
 
 - Java 21+
-- Gradle 8+
-- Ollama installed locally or available through Docker
-- A small local model pulled into Ollama
+- Kafka on `localhost:9092`
+- Cassandra on `localhost:9042`
+- Optional Ollama at `http://localhost:11434`
+- Optional vLLM at `http://localhost:8000/v1`
 
-Default local Ollama base URL:
-
-```text
-http://localhost:11434
-```
-
-Default local vLLM OpenAI-compatible base URL:
+Quarkus UI/API:
 
 ```text
-http://localhost:8000/v1
-```
-
-Current local default model:
-
-```text
-granite4:3b
-```
-
-Alternative local model candidates:
-
-```text
-llama3.1:8b
-llama3.1:latest
-gemma4:e4b
-llama3.2:3b, if pulled locally
-qwen2.5:3b
-mistral
+http://localhost:8081
 ```
 
 ---
 
-## 5. Dependency Decisions
-
-Initial dependency direction:
+## 11) Current Project Structure
 
 ```text
-Pekko Typed
-Pekko SLF4J
-Pekko actor testkit typed
-LangChain4j Ollama integration
-Small Java HttpClient adapter for vLLM's OpenAI-compatible API
-Logback runtime logging
-JUnit 5
+app/
+  src/main/java/com/example/agent/
+    Main.java
+    config/
+    gateway/
+    kafka/
+    llm/
+    prompts/
+    protocol/
+    tool/
+      adapter/
+      service/
+      ToolRegistryActor.java
+      ToolWiring.java
+      DefaultToolWiring.java
+      ServiceBackedToolWiring.java
+    workflow/
+
+quarkus-adapter/
+  cassandra/schema.cql
+  src/main/java/com/example/adapter/
+    inbound/
+      CanonicalInboundEvent.java
+      CommandEventPublisher.java
+      GuardianWebhookResource.java
+      GuardianPoller.java
+      HackerNewsPoller.java
+      InboundEventDeduplicator.java
+      MockGoogleInboundResource.java
+      MockGoogleBusinessProfileReviewRequest.java
+      MockYouTubeCommentRequest.java
+      GoogleBusinessProfilePayload.java
+      YouTubeCommentPayload.java
+      GoogleCredentialsProvider.java
+      GoogleBusinessProfilePoller.java
+      YouTubePoller.java
+    outbound/
+      NewsSummaryConsumer.java
+      CassandraSummaryWriter.java
+      SummaryQueryResource.java
+    ui/
+      UiResource.java
+  src/main/resources/
+    application.properties
+    templates/UiResource/
+      index.html
+      summaryRows.html
+      webhookResult.html
 ```
 
-Current intended versions from the procedural skill:
+Later Google service split:
 
 ```text
-Java:        21
-Scala bin:   2.13
-Pekko:       1.6.0
-LangChain4j: 1.15.0
-```
-
-Update this section if the actual implementation pins different versions.
-
----
-
-## 6. Current Message Protocol Plan
-
-Use immutable Java records for all messages crossing actor boundaries.
-
-Minimum protocol concepts:
-
-```text
-AgentRequest(requestId, input)
-AgentResponse(requestId, output)
-LlmProtocol.Ask(requestId, prompt, replyTo)
-LlmProtocol.Response(requestId, text, error)
-```
-
-Every LLM call should carry a correlation ID.
-
-Recommended ID shape:
-
-```text
-<requestId>:research
-<requestId>:plan
-<requestId>:execute
-```
-
----
-
-## 7. Current Non-Blocking LLM Decision
-
-LLM calls must not run directly on the actor dispatcher.
-
-Current implemented pattern:
-
-```text
-Actor receives command
-  -> submits blocking LangChain4j call to dedicated ExecutorService
-  -> uses pipeToSelf or equivalent callback
-  -> actor receives internal result message
-  -> actor replies to requester
-```
-
-Initial executor candidate:
-
-```java
-Executors.newFixedThreadPool(4)
-```
-
-Current MVP uses a named fixed thread pool configured by `LLM_THREADS` and shuts it down after the actor system terminates. Replace this with a bounded executor before running serious load tests.
-
-Timeout/failure policy for MVP:
-
-```text
-OllamaModelFactory sets the LangChain4j model timeout from LLM_TIMEOUT_SECONDS.
-LlmWorkerActor returns failures as LlmProtocol.Response(error), not thrown exceptions.
-ResearchWorkflowActor converts LLM results into AgentResponse and stops itself.
-PlannerExecutorWorkflowActor calls the LLM twice using <requestId>:plan and <requestId>:execute, converts the final result into AgentResponse, and stops itself.
-PlannerExecutorWorkflowActor invokes configured tools after planning and passes all tool results into the executor prompt. Configure with `AGENT_TOOLS`, for example `time.now,web.search,arxiv.search`.
-Tool selection is policy-gated:
-
-```text
-Planner prompt asks for a tiny PLAN/TOOLS format.
-Workflow parses the planner's TOOLS line.
-If the tiny model omits tools, workflow applies a simple request heuristic.
-Policy intersects requested tools with AGENT_TOOLS and caps with AGENT_MAX_TOOLS.
-Only approved tools are invoked.
-```
-```
-
-vLLM integration keeps the same actor/protocol boundary and swaps only the model factory/client layer. The vLLM client uses explicit JSON requests and forces HTTP/1.1 because the local vLLM server returned missing-body errors with Java requests that did not pin HTTP/1.1.
-
----
-
-## 8. Current Project Structure Target
-
-Preferred full structure after Gradle init:
-
-```text
-pekko-llm-agent-runtime/
-├── AGENT.md
-├── .agents/skills/pekko-llm-agent-runtime/SKILL.md
-├── settings.gradle.kts
-├── gradle/libs.versions.toml
-├── README.md
-├── docker-compose.yml
-└── app/
-    ├── build.gradle.kts
-    └── src/
-        └── main/
-        ├── java/
-        │   └── com/example/agent/
-        │       ├── Main.java
-        │       ├── config/
-        │       │   └── AppConfig.java
-        │       ├── gateway/
-        │       │   └── GatewayActor.java
-        │       ├── llm/
-        │       │   ├── ChatModelFactory.java
-        │       │   ├── LlmBackend.java
-        │       │   ├── LlmWorkerActor.java
-        │       │   ├── LlmProtocol.java
-        │       │   ├── OllamaModelFactory.java
-        │       │   └── VllmModelFactory.java
-        │       ├── workflow/
-        │       │   ├── ResearchWorkflowActor.java
-        │       │   └── PlannerExecutorWorkflowActor.java
-        │       ├── protocol/
-        │       │   ├── AgentRequest.java
-        │       │   └── AgentResponse.java
-        │       ├── tool/
-        │       │   ├── ArxivSearchToolActor.java
-        │       │   ├── TimeToolActor.java
-        │       │   ├── ToolProtocol.java
-        │       │   ├── ToolRegistryActor.java
-        │       │   └── WebSearchToolActor.java
-        │       └── prompts/
-        │           └── PromptTemplates.java
-        └── resources/
-            └── application.conf
-```
-
-Current MVP implementation:
-
-```text
-app/src/main/java/com/example/agent/
-├── Main.java
-├── config/AppConfig.java
-├── gateway/GatewayActor.java
-├── llm/ChatModelFactory.java
-├── llm/LlmBackend.java
-├── llm/LlmWorkerActor.java
-├── llm/LlmProtocol.java
-├── llm/OllamaModelFactory.java
-├── llm/VllmModelFactory.java
-├── prompts/PromptTemplates.java
-├── protocol/AgentRequest.java
-├── protocol/AgentResponse.java
-├── tool/TimeToolActor.java
-├── tool/ToolProtocol.java
-├── tool/ToolRegistryActor.java
-├── tool/WebSearchToolActor.java
-├── tool/ArxivSearchToolActor.java
-├── workflow/ResearchWorkflowActor.java
-└── workflow/PlannerExecutorWorkflowActor.java
+quarkus-adapter/src/main/java/com/example/adapter/inbound/google/
+  GoogleOAuthResource.java
+  GoogleCredentialStore.java
+  GoogleCredentialService.java
+  GoogleBusinessProfileIngestService.java
+  GoogleBusinessProfilePoller.java
+  GoogleBusinessProfilePubSubConsumer.java
+  YouTubeIngestService.java
+  YouTubeCommentPoller.java
+  GoogleInboundEventMapper.java
 ```
 
 ---
 
-## 9. Commands to Verify Locally
+## 12) Local Commands
 
-Start or verify Ollama:
-
-```bash
-ollama pull llama3.2:3b
-ollama run llama3.2:3b
-```
-
-Verify Ollama API:
-
-```bash
-curl http://localhost:11434/api/generate -d '{
-  "model": "llama3.2:3b",
-  "prompt": "Say hello from Ollama",
-  "stream": false
-}'
-```
-
-Expected project command once implemented:
-
-```bash
-./gradlew run
-```
-
-Compile-only verification:
+Pekko runtime:
 
 ```bash
 ./gradlew compileJava
+./gradlew run
 ```
 
-Workflow selection:
+Pekko in Kafka mode:
 
 ```bash
-AGENT_WORKFLOW=planner-executor ./gradlew run
-AGENT_WORKFLOW=research ./gradlew run
+APP_MODE=kafka-runtime \
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
+KAFKA_INPUT_TOPIC=agent.commands.v1 \
+KAFKA_OUTPUT_TOPIC=agent.workflow.events.v1 \
+KAFKA_GROUP_ID=pekko-agent-runtime \
+AGENT_WORKFLOW=react \
+AGENT_TOOLS=time.now,web.search,arxiv.search,pubmed.search \
+./gradlew run
 ```
 
-Backend and concurrency selection:
+Quarkus adapter tests:
 
 ```bash
-LLM_BACKEND=ollama AGENT_REQUESTS=2 ./gradlew run
-LLM_BACKEND=vllm VLLM_BASE_URL=http://localhost:8000/v1 VLLM_MODEL=<served-model-name> VLLM_API_TYPE=completion AGENT_REQUESTS=8 ./gradlew run
+./quarkus-adapter/mvnw -f quarkus-adapter/pom.xml clean test
 ```
 
-vLLM concurrency sweep script:
+Quarkus dev mode:
 
 ```bash
-VLLM_MODEL=<served-model-name> scripts/test-vllm-concurrency.sh
-CONCURRENCY_LEVELS="1 4 8 16" AGENT_WORKFLOW=research VLLM_API_TYPE=completion scripts/test-vllm-concurrency.sh
+cd quarkus-adapter && ./mvnw clean quarkus:dev
 ```
 
-For base/pretrained models such as `google/gemma-3-1b-pt`, use `VLLM_API_TYPE=completion`. Use `VLLM_API_TYPE=chat` only for chat/instruct models or when vLLM is started with a compatible chat template.
-
-For instruct/chat models such as `google/gemma-3-1b-it`, prefer the full agent workflow:
+Quarkus mock-only dev mode:
 
 ```bash
-VLLM_MODEL=google/gemma-3-1b-it \
-VLLM_API_TYPE=chat \
-VLLM_MAX_TOKENS=512 \
-AGENT_WORKFLOW=planner-executor \
-AGENT_TOOLS=time.now,web.search \
-AGENT_MAX_TOOLS=2 \
-CONCURRENCY_LEVELS="1 2 4 8" \
-scripts/test-vllm-concurrency.sh
+cd quarkus-adapter
+GOOGLE_GBP_POLL_ENABLED=false \
+GOOGLE_YOUTUBE_POLL_ENABLED=false \
+GUARDIAN_POLL_ENABLED=false \
+HACKERNEWS_POLL_ENABLED=false \
+./mvnw quarkus:dev
 ```
 
-Use the exact model ID returned by:
+Mock Google publish examples:
 
 ```bash
-curl http://localhost:8000/v1/models
+curl -X POST http://localhost:8081/mock/google/gbp-review \
+  -H "content-type: application/json" \
+  -d '{"tenantId":"tenant-default","accountId":"accounts/mock-account-1","locationId":"locations/mock-location-1","reviewId":"reviews/mock-review-1","reviewerDisplayName":"Mock Reviewer","starRating":"FIVE","comment":"The team responded quickly and clearly.","updateTime":"2026-05-31T16:00:00Z"}'
+```
+
+```bash
+curl -X POST http://localhost:8081/mock/google/youtube-comment \
+  -H "content-type: application/json" \
+  -d '{"tenantId":"tenant-default","channelId":"mock-channel-1","videoId":"mock-video-1","commentId":"mock-comment-1","authorDisplayName":"Mock Viewer","textDisplay":"Can you share more details about this?","publishedAt":"2026-05-31T16:00:00Z","likeCount":3}'
+```
+
+Cassandra schema load:
+
+```bash
+sudo docker exec -i cassandra-dev cqlsh < quarkus-adapter/cassandra/schema.cql
 ```
 
 ---
 
-## 10. Known Risks
+## 13) Risks To Actively Manage
 
-Current risks to watch:
-
-- Blocking the Pekko actor dispatcher with `model.chat(...)`.
-- Creating too many workflow actors without lifecycle cleanup.
-- Letting LLM output control actor spawning directly.
-- Starting cluster sharding before the local actor model is proven.
-- Using unbounded mailboxes, unbounded executors, or unbounded prompt/context growth.
-- Logging sensitive prompt/user data by default.
-
----
-
-## 11. Explicit Local DO NOTs
-
-Do not do these in this project:
-
-```text
-DO NOT create one ActorSystem per request.
-DO NOT create one ActorSystem per tenant for the MVP.
-DO NOT call LangChain4j synchronously inside actor message handlers.
-DO NOT add cluster sharding before the single-node flow works.
-DO NOT add RAG/vector DB before the basic LLM worker works.
-DO NOT stream every token as an actor message.
-DO NOT store API keys, credentials, or private tokens in this file.
-DO NOT copy the whole procedural skill into this file.
-```
+- Blocking actor dispatchers with synchronous/long-running operations
+- Contract drift between source adapters and canonical inbound event model
+- Duplicate event processing without idempotency checks
+- Token/credential leakage in logs, config, tests, or fixtures
+- Unbounded prompt/context/tool-call growth in workflows
+- Kafka publish/consume failures being swallowed
+- Source-specific logic leaking into Pekko boundary
+- Google API quota/rate-limit behavior during polling
+- Real GBP API limitations/approval requirements blocking local test progress
 
 ---
 
-## 12. Next Actions
+## 14) Explicit DO NOTs
 
-Recommended next implementation steps:
-
-1. Create Gradle Java project.
-2. Add Pekko Typed and LangChain4j Ollama dependencies.
-3. Add minimal `application.conf`.
-4. Implement `OllamaModelFactory`.
-5. Implement `LlmProtocol`.
-6. Implement `LlmWorkerActor` using a dedicated executor and `pipeToSelf`.
-7. Implement `ResearchWorkflowActor`.
-8. Implement `Main` to submit one test request.
-9. Run against local Ollama.
-10. Record actual versions, commands, and issues in this file.
+- Do not create one ActorSystem per request.
+- Do not call external APIs directly from agent/workflow actors.
+- Do not put Google clients inside Pekko workflows.
+- Do not add source-specific event formats at the Pekko Kafka boundary.
+- Do not swallow Kafka consume/publish failures silently.
+- Do not hardcode tenant IDs.
+- Do not commit secrets, tokens, API keys, OAuth client secrets, or refresh tokens.
+- Do not create fake/dummy Google Business Profiles for testing.
+- Do not use Kafka as internal agent-to-agent messaging.
+- Do not disable dead-letter logs until lifecycle bugs are investigated.
 
 ---
 
-## 13. Open Questions
+## 15) Next Actions
 
-Open questions to resolve during implementation:
+Execution order:
 
-- Resolved: first workflow was `ResearchWorkflowActor`; `PlannerExecutorWorkflowActor` now also exists and is the default route.
-- Should the LLM worker be a single actor with executor-backed concurrency or a pool of LLM worker actors?
-- Should request/response be CLI-only first, or should a minimal HTTP gateway be added after the actor flow works?
-- Resolved: local Ollama models include `granite4:3b`, `gemma4:e4b`, `llama3.1:latest`, and `llama3.1:8b`.
-- What timeout works reliably for the selected local model?
-- What vLLM model name and server flags should be used for local concurrency tests?
+1. Done: canonical inbound event type supports `source`, `sourceRecordId`, `tenantId`, and bounded `payload`.
+2. Done: mock Google publisher endpoints exist for GBP review and YouTube comment events.
+3. Next: run full local Kafka -> Pekko -> Kafka -> Cassandra/UI smoke test with mock GBP/YouTube events.
+4. Done: ingest and projection idempotency safeguards are in place.
+5. Done: Google dependency set is in `quarkus-adapter/pom.xml`.
+6. Done: Google credential abstraction exists without real credentials in tests.
+7. Next: split GBP review hydration/listing behind a dedicated service interface.
+8. Next: split YouTube comment polling behind a dedicated service interface and add watermarking.
+9. Partial: normalization/publisher tests exist; add broker-backed integration test when local test infrastructure is chosen.
+10. Done: UI/API exposes source type, source record ID, and processing status.
 
 ---
 
-## 14. Session Notes
+## 16) Backlog / Not Current Iteration
 
-Use this section for short, durable notes from implementation sessions. Keep it concise. Move reusable lessons into `pekko_llm_agent_runtime_skill.md` only if they become general procedure.
+Knowledge memory subsystem:
 
-```text
-2026-05-28: Created working-memory split. Skill file is procedural memory; AGENT.md is working memory. Implementation not yet confirmed.
-2026-05-28: Gradle initialized as Kotlin DSL multi-project app under `app/`; wrapper generated. Local skill moved to `.agents/skills/pekko-llm-agent-runtime/SKILL.md`.
-2026-05-28: Implemented MVP Java Pekko runtime: `Main` starts one ActorSystem, spawns one `LlmWorkerActor`, spawns one `ResearchWorkflowActor`, submits one request, prints response/failure, terminates actor system, then shuts down the LLM executor. `./gradlew compileJava` passes.
-2026-05-28: `./gradlew run` confirmed the actor flow and clean shutdown. First run failed through the message path because `llama3.2:3b` was not pulled. `ollama list` showed `granite4:3b`, `gemma4:e4b`, `llama3.1:latest`, and `llama3.1:8b`; default changed to `granite4:3b`.
-2026-05-28: `./gradlew run` succeeded against `granite4:3b`: the runtime printed a real LLM answer, then Pekko CoordinatedShutdown completed.
-2026-05-28: Added `GatewayActor` and `PlannerExecutorWorkflowActor`. Default `AGENT_WORKFLOW` is now `planner-executor`; planner step uses `<requestId>:plan`, executor step uses `<requestId>:execute`. `./gradlew compileJava`, `./gradlew test`, and `./gradlew run` pass.
-2026-05-29: Added `LLM_BACKEND=ollama|vllm`. Ollama uses `OllamaChatModel`; vLLM uses a local Java HttpClient adapter against `VLLM_BASE_URL` default `http://localhost:8000/v1` with `VLLM_API_KEY` default `EMPTY`. Added `AGENT_REQUESTS` to submit multiple requests through `GatewayActor` for concurrency testing. Verified `./gradlew compileJava`, `./gradlew test`, default Ollama run, and `AGENT_REQUESTS=2 AGENT_WORKFLOW=research ./gradlew run`.
-2026-05-29: Added `scripts/test-vllm-concurrency.sh`. It checks `${VLLM_BASE_URL}/models`, then runs `./gradlew --quiet run` over `CONCURRENCY_LEVELS` with `LLM_BACKEND=vllm`. Syntax check and `./gradlew compileJava` pass.
-2026-05-29: Reproduced vLLM missing-body error. Fixed Java vLLM client by sending explicit JSON and forcing HTTP/1.1. Local vLLM reports served model ID `google/gemma-3-1b-pt`; `gemma-3-1b-pt` is not accepted as the model name. Because this is a base/pretrained model without a chat template, use `VLLM_API_TYPE=completion` or serve a chat/instruct model for `VLLM_API_TYPE=chat`.
-2026-05-29: Added vLLM `VLLM_SYSTEM_PROMPT` and `VLLM_MAX_TOKENS`; script now defaults to `AGENT_WORKFLOW=planner-executor` and `VLLM_API_TYPE=chat` for testing the full agentic path with instruct/chat models like `google/gemma-3-1b-it`. `bash -n scripts/test-vllm-concurrency.sh` and `./gradlew compileJava` pass.
-2026-05-29: Added typed tool boundary: `ToolProtocol`, `ToolRegistryActor`, and deterministic `TimeToolActor` for `time.now`. `PlannerExecutorWorkflowActor` now runs planner LLM -> time tool -> executor LLM with tool context. `./gradlew compileJava` and `./gradlew test` pass. A runtime attempt with Ollama failed before tool invocation due to local CUDA OOM in Ollama, not actor/tool compilation.
-2026-05-29: Added `web.search` and `arxiv.search` tools. `WebSearchToolActor` uses DuckDuckGo Instant Answer JSON over async Java HttpClient. `ArxivSearchToolActor` uses the arXiv API over async Java HttpClient and parses Atom XML. `AGENT_TOOLS` controls enabled tools; script defaults to `time.now,web.search,arxiv.search`. Verified `./gradlew compileJava`, `./gradlew test`, script syntax, and a single vLLM planner-executor run with all three tools enabled. The run returned successfully and logged `time.now`; web/arXiv results were included as tool context but not surfaced by the time-only prompt.
-2026-05-29: Added tool-selection policy and runtime bounds. Planner prompt now asks for tiny `PLAN:` / `TOOLS:` output. Workflow parses requested tools, falls back to simple heuristics for tiny models, intersects with `AGENT_TOOLS`, and caps with `AGENT_MAX_TOOLS`. Added bounded LLM executor queue via `LLM_QUEUE_SIZE`, workflow timeout via `WORKFLOW_TIMEOUT_SECONDS`, and tool timeout via `TOOL_TIMEOUT_SECONDS`. `LlmWorkerActor` returns rejected executor submissions as response errors. Added request and summary `METRIC` output; vLLM script now prints `BENCH` lines from summary metrics. Verified `./gradlew compileJava`, `./gradlew test`, and script syntax. Live vLLM verification was blocked because `localhost:8000` refused connection.
-2026-05-29: Search tools now normalize resource output with `Resources`, numbered titles, `URL`, and `Snippet` fields. `WebSearchToolActor` and `ArxivSearchToolActor` log resource counts and URLs instead of raw bodies. Executor prompt now asks for a short `Sources` section when tool context includes resource URLs. `./gradlew compileJava` and `./gradlew test` pass.
-2026-05-29: Hardened search tool HTTP calls with explicit `User-Agent`/`Accept` headers and shorter normalized queries. Direct probe showed DuckDuckGo JSON no longer returns 403 with these headers, but may return empty results for niche queries. Direct arXiv probe returned HTTP 429, so arXiv should not be enabled by default in concurrency sweeps. Script default changed to `AGENT_TOOLS=time.now,web.search`; opt into arXiv explicitly for low-concurrency research runs.
-2026-05-29: Made source handling deterministic. `PlannerExecutorWorkflowActor` now extracts exact `URL:` lines from successful tool outputs, logs resource counts and URLs at workflow level, and appends a `Sources` section with exact URLs if the executor model omits them. Executor prompt now forbids generic source labels like "web search results" and asks for exact URL fields only. Web search parser also reads DuckDuckGo `Results` in addition to abstract/related topics. `./gradlew compileJava` and `./gradlew test` pass.
-```
+- event-centric knowledge/world model
+- Postgres + pgvector or graph-backed memory
+- article/document store
+- entity/claim/event extraction
+- memory retrieval pack before synthesis
+- memory update events from completed workflows
+
+Kafka extensions:
+
+- dead-letter topic
+- tenant usage events
+- audit/billing projections
+
+Runtime hardening:
+
+- JFR + GC tuning workflow
+- bounded mailbox/load tests
+- tenant isolation tests
+- ReAct workflow timer/dead-letter cleanup
+
+---
+
+## 17) Open Questions
+
+- Google ingest mode per source: polling first, Pub/Sub where available, or both?
+- Tenant routing model for Google assets: one tenant per Google account, many locations per tenant, or many tenants per account?
+- Approval flow for generated GBP/YouTube replies: always human-approved, policy-driven, or tenant-configured?
+- Where should credentials be stored locally and in staging?
+- Should generated responses remain in Cassandra only, or also produce dedicated `agent.generated.outputs.v1` events later?

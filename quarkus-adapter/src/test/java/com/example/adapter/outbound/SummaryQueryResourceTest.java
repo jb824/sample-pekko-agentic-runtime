@@ -35,6 +35,8 @@ class SummaryQueryResourceTest {
                     "a1",
                     "wf",
                     "src",
+                    "guardian",
+                    "stored",
                     "summary",
                     "topics",
                     "high",

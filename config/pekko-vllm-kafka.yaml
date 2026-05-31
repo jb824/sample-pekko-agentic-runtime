@@ -1,0 +1,41 @@
+app:
+  mode: kafka-runtime
+
+kafka:
+  bootstrap:
+    servers: localhost:9092
+  input:
+    topic: agent.commands.v1
+  output:
+    topic: agent.workflow.events.v1
+  group:
+    id: pekko-agent-runtime
+
+llm:
+  backend: vllm
+  timeout:
+    seconds: 120
+
+vllm:
+  base:
+    url: http://localhost:8000/v1
+  model: ibm-granite/granite-4.1-3b
+  api:
+    type: chat
+  max:
+    tokens: 512
+
+agent:
+  workflow: research
+  tools: time.now,web.search,arxiv.search,pubmed.search
+  max:
+    tools: 2
+    steps: 4
+
+workflow:
+  timeout:
+    seconds: 240
+
+tool:
+  timeout:
+    seconds: 60

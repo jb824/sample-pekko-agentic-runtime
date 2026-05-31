@@ -76,7 +76,7 @@
 <div class="shell">
   <section class="card">
     <h1>Agent Summary Console</h1>
-    <p class="sub">Quarkus + HTMX UI for publishing inbound articles and viewing Cassandra projections.</p>
+    <p class="sub">Quarkus + HTMX UI for publishing inbound source events and viewing Cassandra projections.</p>
 
     <form class="grid"
           hx-get="/ui/summaries"
@@ -127,11 +127,92 @@
   </section>
 
   <section class="card">
+    <h2>Publish Mock Google Events</h2>
+    <form class="grid"
+          hx-post="/ui/mock/gbp-review"
+          hx-target="#mock-result"
+          hx-swap="innerHTML">
+      <div>
+        <label for="gbp-tenant">Tenant ID</label>
+        <input id="gbp-tenant" name="tenantId" value="{tenantId}">
+      </div>
+      <div>
+        <label for="gbp-account">GBP Account ID</label>
+        <input id="gbp-account" name="accountId" value="accounts/mock-account-1">
+      </div>
+      <div>
+        <label for="gbp-location">GBP Location ID</label>
+        <input id="gbp-location" name="locationId" value="locations/mock-location-1">
+      </div>
+      <div>
+        <label for="gbp-review">Review ID</label>
+        <input id="gbp-review" name="reviewId" value="reviews/mock-review-1">
+      </div>
+      <div>
+        <label for="gbp-reviewer">Reviewer</label>
+        <input id="gbp-reviewer" name="reviewerDisplayName" value="Mock Reviewer">
+      </div>
+      <div>
+        <label for="gbp-rating">Rating</label>
+        <input id="gbp-rating" name="starRating" value="FIVE">
+      </div>
+      <div>
+        <label for="gbp-comment">Review Text</label>
+        <input id="gbp-comment" name="comment" value="The team responded quickly and clearly.">
+      </div>
+      <div>
+        <button type="submit">Publish GBP</button>
+      </div>
+    </form>
+
+    <form class="grid"
+          hx-post="/ui/mock/youtube-comment"
+          hx-target="#mock-result"
+          hx-swap="innerHTML">
+      <div>
+        <label for="yt-tenant">Tenant ID</label>
+        <input id="yt-tenant" name="tenantId" value="{tenantId}">
+      </div>
+      <div>
+        <label for="yt-channel">Channel ID</label>
+        <input id="yt-channel" name="channelId" value="mock-channel-1">
+      </div>
+      <div>
+        <label for="yt-video">Video ID</label>
+        <input id="yt-video" name="videoId" value="mock-video-1">
+      </div>
+      <div>
+        <label for="yt-comment">Comment ID</label>
+        <input id="yt-comment" name="commentId" value="mock-comment-1">
+      </div>
+      <div>
+        <label for="yt-author">Author</label>
+        <input id="yt-author" name="authorDisplayName" value="Mock Viewer">
+      </div>
+      <div>
+        <label for="yt-text">Comment Text</label>
+        <input id="yt-text" name="textDisplay" value="Can you share more details about this?">
+      </div>
+      <div>
+        <label for="yt-likes">Likes</label>
+        <input id="yt-likes" name="likeCount" type="number" min="0" value="3">
+      </div>
+      <div>
+        <button type="submit">Publish YouTube</button>
+      </div>
+    </form>
+    <div id="mock-result" class="sub"></div>
+  </section>
+
+  <section class="card">
     <h2>Latest Summaries</h2>
     <table>
       <thead>
       <tr>
         <th>Created</th>
+        <th>Source</th>
+        <th>Source Record</th>
+        <th>Status</th>
         <th>Article</th>
         <th>Confidence</th>
         <th>Summary</th>
@@ -143,12 +224,15 @@
              hx-swap="innerHTML">
       {#if summaries.isEmpty}
       <tr>
-        <td colspan="4" class="mono">No summaries found.</td>
+        <td colspan="7" class="mono">No summaries found.</td>
       </tr>
       {#else}
       {#for row in summaries}
       <tr>
         <td class="mono">{row.createdAt}</td>
+        <td class="mono">{row.source}</td>
+        <td class="mono">{row.sourceRecordId}</td>
+        <td>{row.processingStatus}</td>
         <td class="mono">{row.articleId}</td>
         <td>{row.confidence}</td>
         <td>{row.summary}</td>

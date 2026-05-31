@@ -1,11 +1,14 @@
 {#if summaries.isEmpty}
 <tr>
-  <td colspan="4" class="mono">No summaries found.</td>
+  <td colspan="7" class="mono">No summaries found.</td>
 </tr>
 {#else}
 {#for row in summaries}
 <tr>
   <td class="mono">{row.createdAt}</td>
+  <td class="mono">{row.source}</td>
+  <td class="mono">{row.sourceRecordId}</td>
+  <td>{row.processingStatus}</td>
   <td class="mono">{row.articleId}</td>
   <td>{row.confidence}</td>
   <td>{row.summary}</td>

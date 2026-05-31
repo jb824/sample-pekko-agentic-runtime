@@ -11,6 +11,7 @@ import com.example.agent.tool.ToolProtocol;
 import com.example.agent.tool.ToolRegistryActor;
 import com.example.agent.tool.ToolWiring;
 import com.example.agent.tool.DefaultToolWiring;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -71,7 +72,7 @@ public final class KafkaRuntimeRunner {
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         KafkaProducer<String, String> outputProducer = new KafkaProducer<>(producerProps(config));
-        Map<String, NewsArticleReceivedEvent> pending = new ConcurrentHashMap<>();
+        Map<String, InboundCommandEvent> pending = new ConcurrentHashMap<>();
 
         Behavior<AgentResponse> root = Behaviors.setup(context -> {
             ActorRef<LlmProtocol.Command> llmWorker = context.spawn(
@@ -100,7 +101,7 @@ public final class KafkaRuntimeRunner {
 
             return Behaviors.receive(AgentResponse.class)
                     .onMessage(AgentResponse.class, response -> {
-                        NewsArticleReceivedEvent inbound = pending.remove(response.requestId());
+                        InboundCommandEvent inbound = pending.remove(response.requestId());
                         if (inbound == null) {
                             context.getLog().warn("No pending source event found for request {}", response.requestId());
                             return Behaviors.same();
@@ -136,7 +137,7 @@ public final class KafkaRuntimeRunner {
             ObjectMapper mapper,
             ActorRef<GatewayActor.Command> gateway,
             ActorRef<AgentResponse> replyTo,
-            Map<String, NewsArticleReceivedEvent> pending
+            Map<String, InboundCommandEvent> pending
     ) {
         ConsumerSettings<String, String> settings = ConsumerSettings.create(system, new StringDeserializer(), new StringDeserializer())
                 .withBootstrapServers(config.kafkaBootstrapServers())
@@ -145,18 +146,37 @@ public final class KafkaRuntimeRunner {
         CommitterSettings committerSettings = CommitterSettings.create(system);
         Materializer materializer = SystemMaterializer.get(system).materializer();
         AtomicInteger streamCounter = new AtomicInteger();
+        system.log().info(
+                "Kafka runtime consuming input_topic={} output_topic={} group_id={} workflow={} tools={}",
+                config.kafkaInputTopic(),
+                config.kafkaOutputTopic(),
+                config.kafkaGroupId(),
+                config.workflowMode(),
+                config.enabledTools()
+        );
 
         CompletionStage<Done> completion = Consumer.committableSource(settings, Subscriptions.topics(config.kafkaInputTopic()))
                 .map(message -> {
                     ConsumerRecord<String, String> record = message.record();
                     try {
-                        NewsArticleReceivedEvent event = mapper.readValue(record.value(), NewsArticleReceivedEvent.class);
+                        InboundCommandEvent event = mapper.readValue(record.value(), InboundCommandEvent.class);
                         String requestId = event.eventId();
                         pending.put(requestId, event);
-                        String prompt = "Summarize and synthesize this news article with concise context.\n"
-                                + "Title: " + event.payload().title() + "\n"
-                                + "URL: " + event.payload().url() + "\n";
+                        String prompt = promptFor(event);
+                        int received = streamCounter.incrementAndGet();
+                        system.log().info(
+                                "Kafka runtime received command count={} topic={} partition={} offset={} event_id={} event_type={} source={} source_record_id={}",
+                                received,
+                                record.topic(),
+                                record.partition(),
+                                record.offset(),
+                                event.eventId(),
+                                event.eventType(),
+                                event.source(),
+                                event.sourceRecordId()
+                        );
                         gateway.tell(new GatewayActor.HandleRequest(new AgentRequest(requestId, prompt), replyTo));
+                        system.log().info("Kafka runtime dispatched workflow request_id={} event_type={}", requestId, event.eventType());
                     } catch (Exception exception) {
                         system.log().error("Failed to parse inbound command event", exception);
                     }
@@ -189,18 +209,51 @@ public final class KafkaRuntimeRunner {
         return new DefaultToolWiring();
     }
 
-    public record NewsArticleReceivedEvent(
+    private static String promptFor(InboundCommandEvent event) {
+        JsonNode payload = event.payload();
+        return switch (event.eventType()) {
+            case "GoogleBusinessProfileReviewReceived", "MockGoogleBusinessProfileReviewReceived" ->
+                    "Summarize and propose a concise operational response for this Google Business Profile review.\n"
+                            + "Tenant: " + event.tenantId() + "\n"
+                            + "Source record: " + event.sourceRecordId() + "\n"
+                            + "Reviewer: " + text(payload, "reviewerDisplayName") + "\n"
+                            + "Rating: " + text(payload, "starRating") + "\n"
+                            + "Comment: " + text(payload, "comment") + "\n";
+            case "YouTubeCommentReceived", "MockYouTubeCommentReceived" ->
+                    "Summarize and propose a concise operational response for this YouTube comment.\n"
+                            + "Tenant: " + event.tenantId() + "\n"
+                            + "Source record: " + event.sourceRecordId() + "\n"
+                            + "Channel: " + text(payload, "channelId") + "\n"
+                            + "Video: " + text(payload, "videoId") + "\n"
+                            + "Author: " + text(payload, "authorDisplayName") + "\n"
+                            + "Comment: " + text(payload, "textDisplay") + "\n";
+            default ->
+                    "Summarize and synthesize this inbound source item with concise context.\n"
+                            + "Tenant: " + event.tenantId() + "\n"
+                            + "Source: " + event.source() + "\n"
+                            + "Source record: " + event.sourceRecordId() + "\n"
+                            + "Title: " + text(payload, "title") + "\n"
+                            + "URL: " + text(payload, "url") + "\n";
+        };
+    }
+
+    private static String text(JsonNode node, String field) {
+        if (node == null || node.path(field).isMissingNode() || node.path(field).isNull()) {
+            return "";
+        }
+        return node.path(field).asText("");
+    }
+
+    public record InboundCommandEvent(
             String eventId,
             String eventType,
             int eventVersion,
             String tenantId,
             String source,
+            String sourceRecordId,
             Instant occurredAt,
-            NewsArticlePayload payload
+            JsonNode payload
     ) {
-    }
-
-    public record NewsArticlePayload(String articleId, String title, String url) {
     }
 
     public record NewsSummaryGeneratedEvent(
@@ -213,7 +266,7 @@ public final class KafkaRuntimeRunner {
             String source,
             SummaryPayload payload
     ) {
-        static NewsSummaryGeneratedEvent from(NewsArticleReceivedEvent source, AgentResponse response) {
+        static NewsSummaryGeneratedEvent from(InboundCommandEvent source, AgentResponse response) {
             return new NewsSummaryGeneratedEvent(
                     UUID.randomUUID().toString(),
                     "NewsSummaryGenerated",
@@ -223,7 +276,7 @@ public final class KafkaRuntimeRunner {
                     source.eventId(),
                     "pekko-agent-runtime",
                     new SummaryPayload(
-                            source.payload().articleId(),
+                            source.sourceRecordId(),
                             response.isSuccess() ? response.output() : response.error().getMessage(),
                             "",
                             response.isSuccess() ? "medium" : "low"

@@ -1,5 +1,8 @@
 package com.example.agent.config;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 
@@ -8,10 +11,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 final class AppConfigLoader {
     private static final Config CONFIG = ConfigFactory.load();
+    private static final Map<String, String> YAML_CONFIG = loadYamlConfig();
 
     private AppConfigLoader() {
     }
@@ -88,6 +94,10 @@ final class AppConfigLoader {
             return envValue;
         }
         for (String key : candidateConfigKeys(envName)) {
+            String yamlValue = YAML_CONFIG.get(key);
+            if (yamlValue != null && !yamlValue.isBlank()) {
+                return yamlValue;
+            }
             if (CONFIG.hasPath(key)) {
                 Object configValue = CONFIG.getAnyRef(key);
                 if (configValue != null) {
@@ -106,6 +116,64 @@ final class AppConfigLoader {
                 lower.replace('_', '.'),
                 lower.replace('_', '-')
         );
+    }
+
+    private static Map<String, String> loadYamlConfig() {
+        String configFile = System.getenv("APP_CONFIG_FILE");
+        if (configFile == null || configFile.isBlank()) {
+            configFile = System.getProperty("app.config.file", "");
+        }
+        if (configFile.isBlank()) {
+            return Map.of();
+        }
+
+        Path path = resolveConfigPath(configFile);
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalArgumentException("APP_CONFIG_FILE does not exist: " + configFile);
+        }
+
+        try {
+            ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+            Map<String, Object> raw = mapper.readValue(path.toFile(), new TypeReference<>() {
+            });
+            Map<String, String> flattened = new HashMap<>();
+            flatten("", raw, flattened);
+            return Map.copyOf(flattened);
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to read APP_CONFIG_FILE: " + configFile, exception);
+        }
+    }
+
+    private static Path resolveConfigPath(String configFile) {
+        Path configured = Path.of(configFile);
+        if (configured.isAbsolute() || Files.isRegularFile(configured)) {
+            return configured;
+        }
+
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null) {
+            Path candidate = current.resolve(configured);
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+            current = current.getParent();
+        }
+        return configured;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void flatten(String prefix, Map<String, Object> input, Map<String, String> output) {
+        for (Map.Entry<String, Object> entry : input.entrySet()) {
+            String key = prefix.isBlank() ? entry.getKey() : prefix + "." + entry.getKey();
+            Object value = entry.getValue();
+            if (value instanceof Map<?, ?> nested) {
+                flatten(key, (Map<String, Object>) nested, output);
+            } else if (value instanceof List<?> list) {
+                output.put(key, String.join(",", list.stream().map(String::valueOf).toList()));
+            } else if (value != null) {
+                output.put(key, String.valueOf(value));
+            }
+        }
     }
 
     private static List<String> prompts(String defaultPrompt) {
