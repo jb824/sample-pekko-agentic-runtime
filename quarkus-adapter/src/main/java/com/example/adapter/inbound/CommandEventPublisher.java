@@ -76,6 +76,38 @@ public class CommandEventPublisher {
         return publish(event, "comment_id=" + payload.commentId());
     }
 
+    public String publishYouTubeChannelSnapshot(String tenantId, YouTubeChannelSnapshotPayload payload, Instant occurredAt) throws Exception {
+        Instant timestamp = occurredAt == null ? Instant.now() : occurredAt;
+        String eventId = stableEventId("youtube", payload.channelId() + ":snapshot", timestamp.toString());
+        CanonicalInboundEvent event = new CanonicalInboundEvent(
+                eventId,
+                "YouTubeChannelSnapshotCaptured",
+                1,
+                normalizeTenant(tenantId),
+                "youtube",
+                payload.channelId(),
+                timestamp,
+                payload
+        );
+        return publish(event, "channel_id=" + payload.channelId() + " subscriber_count=" + payload.subscriberCount());
+    }
+
+    public String publishYouTubeChannelActivity(String tenantId, YouTubeChannelActivityPayload payload, Instant occurredAt) throws Exception {
+        Instant timestamp = occurredAt == null ? Instant.now() : occurredAt;
+        String eventId = stableEventId("youtube", payload.activityId(), timestamp.toString());
+        CanonicalInboundEvent event = new CanonicalInboundEvent(
+                eventId,
+                "YouTubeChannelActivityCaptured",
+                1,
+                normalizeTenant(tenantId),
+                "youtube",
+                payload.activityId(),
+                timestamp,
+                payload
+        );
+        return publish(event, "activity_id=" + payload.activityId() + " activity_type=" + payload.activityType());
+    }
+
     public String publishMockGoogleBusinessProfileReview(String tenantId, GoogleBusinessProfilePayload payload, Instant occurredAt) throws Exception {
         Instant timestamp = occurredAt == null ? Instant.now() : occurredAt;
         String eventId = stableEventId("mock-google", payload.reviewId(), timestamp.toString());

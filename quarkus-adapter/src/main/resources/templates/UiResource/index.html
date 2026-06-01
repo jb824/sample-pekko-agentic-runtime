@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pekko News Summaries</title>
+  <title>YouTube Channel Activity Demo</title>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <style>
     :root {
@@ -75,8 +75,8 @@
 <body>
 <div class="shell">
   <section class="card">
-    <h1>Agent Summary Console</h1>
-    <p class="sub">Quarkus + HTMX UI for publishing inbound source events and viewing Cassandra projections.</p>
+    <h1>YouTube Channel Activity Demo Console</h1>
+    <p class="sub">Publish YouTube channel snapshot/activity events and view Pekko-generated analysis outputs from Cassandra.</p>
 
     <form class="grid"
           hx-get="/ui/summaries"
@@ -92,120 +92,115 @@
         <input id="limit" name="limit" type="number" min="1" max="200" value="{limit}">
       </div>
       <div>
-        <button type="submit">Refresh Summaries</button>
+        <button type="submit">Refresh Analysis Feed</button>
       </div>
     </form>
   </section>
 
   <section class="card">
-    <h2>Publish Guardian Webhook Event</h2>
+    <h2>Publish YouTube Channel Snapshot Event</h2>
     <form class="grid"
-          hx-post="/ui/webhook"
-          hx-target="#webhook-result"
+          hx-post="/ui/youtube/channel-snapshot"
+          hx-target="#youtube-result"
           hx-swap="innerHTML">
       <div>
-        <label for="wh-tenant">Tenant ID</label>
-        <input id="wh-tenant" name="tenantId" value="{tenantId}">
+        <label for="ys-tenant">Tenant ID</label>
+        <input id="ys-tenant" name="tenantId" value="{tenantId}">
       </div>
       <div>
-        <label for="wh-article">Article ID</label>
-        <input id="wh-article" name="articleId" placeholder="world/2026/example">
+        <label for="ys-channel">Channel ID</label>
+        <input id="ys-channel" name="channelId" value="UC2KGvj3xpoyPRZqsYXpJJBQ">
       </div>
       <div>
-        <label for="wh-title">Title</label>
-        <input id="wh-title" name="title" placeholder="Example headline">
+        <label for="ys-title">Channel Title</label>
+        <input id="ys-title" name="title" value="Demo Channel">
       </div>
       <div>
-        <label for="wh-url">URL</label>
-        <input id="wh-url" name="url" placeholder="https://www.theguardian.com/...">
+        <label for="ys-country">Country</label>
+        <input id="ys-country" name="country" value="US">
       </div>
       <div>
-        <button type="submit">Publish</button>
+        <label for="ys-subs">Subscribers</label>
+        <input id="ys-subs" name="subscriberCount" type="number" min="0" value="0">
+      </div>
+      <div>
+        <label for="ys-views">Views</label>
+        <input id="ys-views" name="viewCount" type="number" min="0" value="0">
+      </div>
+      <div>
+        <label for="ys-videos">Videos</label>
+        <input id="ys-videos" name="videoCount" type="number" min="0" value="0">
+      </div>
+      <div>
+        <label for="ys-comments">Comments</label>
+        <input id="ys-comments" name="commentCount" type="number" min="0" value="0">
+      </div>
+      <div>
+        <label for="ys-uploads">Uploads Playlist ID</label>
+        <input id="ys-uploads" name="uploadsPlaylistId" placeholder="UU...">
+      </div>
+      <div>
+        <label for="ys-description">Description</label>
+        <input id="ys-description" name="description" value="Demo channel snapshot for analysis.">
+      </div>
+      <div>
+        <button type="submit">Publish Snapshot</button>
       </div>
     </form>
-    <div id="webhook-result" class="sub"></div>
   </section>
 
   <section class="card">
-    <h2>Publish Mock Google Events</h2>
+    <h2>Publish YouTube Channel Activity Event</h2>
     <form class="grid"
-          hx-post="/ui/mock/gbp-review"
-          hx-target="#mock-result"
+          hx-post="/ui/youtube/channel-activity"
+          hx-target="#youtube-result"
           hx-swap="innerHTML">
       <div>
-        <label for="gbp-tenant">Tenant ID</label>
-        <input id="gbp-tenant" name="tenantId" value="{tenantId}">
+        <label for="ya-tenant">Tenant ID</label>
+        <input id="ya-tenant" name="tenantId" value="{tenantId}">
       </div>
       <div>
-        <label for="gbp-account">GBP Account ID</label>
-        <input id="gbp-account" name="accountId" value="accounts/mock-account-1">
+        <label for="ya-channel">Channel ID</label>
+        <input id="ya-channel" name="channelId" value="UC2KGvj3xpoyPRZqsYXpJJBQ">
       </div>
       <div>
-        <label for="gbp-location">GBP Location ID</label>
-        <input id="gbp-location" name="locationId" value="locations/mock-location-1">
+        <label for="ya-channel-title">Channel Title</label>
+        <input id="ya-channel-title" name="channelTitle" value="Demo Channel">
       </div>
       <div>
-        <label for="gbp-review">Review ID</label>
-        <input id="gbp-review" name="reviewId" value="reviews/mock-review-1">
+        <label for="ya-activity-id">Activity ID (optional)</label>
+        <input id="ya-activity-id" name="activityId" placeholder="activity-...">
       </div>
       <div>
-        <label for="gbp-reviewer">Reviewer</label>
-        <input id="gbp-reviewer" name="reviewerDisplayName" value="Mock Reviewer">
+        <label for="ya-type">Activity Type</label>
+        <input id="ya-type" name="activityType" value="upload">
       </div>
       <div>
-        <label for="gbp-rating">Rating</label>
-        <input id="gbp-rating" name="starRating" value="FIVE">
+        <label for="ya-title">Activity Title</label>
+        <input id="ya-title" name="title" value="New tutorial upload">
       </div>
       <div>
-        <label for="gbp-comment">Review Text</label>
-        <input id="gbp-comment" name="comment" value="The team responded quickly and clearly.">
+        <label for="ya-video">Video ID</label>
+        <input id="ya-video" name="videoId" value="demo-video-1">
       </div>
       <div>
-        <button type="submit">Publish GBP</button>
+        <label for="ya-playlist">Playlist ID</label>
+        <input id="ya-playlist" name="playlistId" value="">
+      </div>
+      <div>
+        <label for="ya-description">Description</label>
+        <input id="ya-description" name="description" value="New channel activity for opportunity analysis.">
+      </div>
+      <div>
+        <button type="submit">Publish Activity</button>
       </div>
     </form>
-
-    <form class="grid"
-          hx-post="/ui/mock/youtube-comment"
-          hx-target="#mock-result"
-          hx-swap="innerHTML">
-      <div>
-        <label for="yt-tenant">Tenant ID</label>
-        <input id="yt-tenant" name="tenantId" value="{tenantId}">
-      </div>
-      <div>
-        <label for="yt-channel">Channel ID</label>
-        <input id="yt-channel" name="channelId" value="mock-channel-1">
-      </div>
-      <div>
-        <label for="yt-video">Video ID</label>
-        <input id="yt-video" name="videoId" value="mock-video-1">
-      </div>
-      <div>
-        <label for="yt-comment">Comment ID</label>
-        <input id="yt-comment" name="commentId" value="mock-comment-1">
-      </div>
-      <div>
-        <label for="yt-author">Author</label>
-        <input id="yt-author" name="authorDisplayName" value="Mock Viewer">
-      </div>
-      <div>
-        <label for="yt-text">Comment Text</label>
-        <input id="yt-text" name="textDisplay" value="Can you share more details about this?">
-      </div>
-      <div>
-        <label for="yt-likes">Likes</label>
-        <input id="yt-likes" name="likeCount" type="number" min="0" value="3">
-      </div>
-      <div>
-        <button type="submit">Publish YouTube</button>
-      </div>
-    </form>
-    <div id="mock-result" class="sub"></div>
+    <div id="youtube-result" class="sub"></div>
+    <p class="sub">Production mode: enable `GOOGLE_YOUTUBE_ACTIVITY_POLL_ENABLED=true` to ingest real channel activity through the YouTube poller.</p>
   </section>
 
   <section class="card">
-    <h2>Latest Summaries</h2>
+    <h2>Latest Analysis Events</h2>
     <table>
       <thead>
       <tr>
@@ -213,9 +208,9 @@
         <th>Source</th>
         <th>Source Record</th>
         <th>Status</th>
-        <th>Article</th>
+        <th>Record</th>
         <th>Confidence</th>
-        <th>Summary</th>
+        <th>Insight</th>
       </tr>
       </thead>
       <tbody id="summary-rows"
@@ -224,7 +219,7 @@
              hx-swap="innerHTML">
       {#if summaries.isEmpty}
       <tr>
-        <td colspan="7" class="mono">No summaries found.</td>
+        <td colspan="7" class="mono">No analysis events found.</td>
       </tr>
       {#else}
       {#for row in summaries}

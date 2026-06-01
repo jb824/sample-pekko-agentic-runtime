@@ -227,6 +227,36 @@ public final class KafkaRuntimeRunner {
                             + "Video: " + text(payload, "videoId") + "\n"
                             + "Author: " + text(payload, "authorDisplayName") + "\n"
                             + "Comment: " + text(payload, "textDisplay") + "\n";
+            case "YouTubeChannelSnapshotCaptured" ->
+                    "Analyze this YouTube channel snapshot for audience growth, subscriber growth, and brand-building.\n"
+                            + "Return meaningful diagnostic and prescriptive insight. Use simple ranking labels such as high, medium, or low instead of numeric confidence.\n"
+                            + "Include JSON-like sections named summary, diagnosis, severity, nextSteps, suggestions, and risks.\n"
+                            + "Tenant: " + event.tenantId() + "\n"
+                            + "Channel: " + text(payload, "channelId") + "\n"
+                            + "Title: " + text(payload, "title") + "\n"
+                            + "Country: " + text(payload, "country") + "\n"
+                            + "Subscribers: " + text(payload, "subscriberCount") + "\n"
+                            + "Hidden subscribers: " + text(payload, "hiddenSubscriberCount") + "\n"
+                            + "Views: " + text(payload, "viewCount") + "\n"
+                            + "Videos: " + text(payload, "videoCount") + "\n"
+                            + "Comments: " + text(payload, "commentCount") + "\n"
+                            + "Uploads playlist: " + text(payload, "uploadsPlaylistId") + "\n"
+                            + "Description: " + text(payload, "description") + "\n";
+            case "YouTubeChannelActivityCaptured" ->
+                    "Analyze this YouTube channel activity event for content opportunities, audience-building, and likely cause-effect implications.\n"
+                            + "Return meaningful diagnostic and prescriptive insight. Use simple ranking labels such as high, medium, or low instead of numeric confidence.\n"
+                            + "Include JSON-like sections named summary, activitySignal, diagnosis, severity, nextSteps, suggestions, and risks.\n"
+                            + "Tenant: " + event.tenantId() + "\n"
+                            + "Activity record: " + event.sourceRecordId() + "\n"
+                            + "Channel: " + text(payload, "channelId") + "\n"
+                            + "Channel title: " + text(payload, "channelTitle") + "\n"
+                            + "Activity type: " + text(payload, "activityType") + "\n"
+                            + "Title: " + text(payload, "title") + "\n"
+                            + "Video: " + text(payload, "videoId") + "\n"
+                            + "Playlist: " + text(payload, "playlistId") + "\n"
+                            + "Target channel: " + text(payload, "targetChannelId") + "\n"
+                            + "Recommendation reason: " + text(payload, "recommendationReason") + "\n"
+                            + "Description: " + text(payload, "description") + "\n";
             default ->
                     "Summarize and synthesize this inbound source item with concise context.\n"
                             + "Tenant: " + event.tenantId() + "\n"
@@ -269,7 +299,7 @@ public final class KafkaRuntimeRunner {
         static NewsSummaryGeneratedEvent from(InboundCommandEvent source, AgentResponse response) {
             return new NewsSummaryGeneratedEvent(
                     UUID.randomUUID().toString(),
-                    "NewsSummaryGenerated",
+                    outputEventType(source),
                     1,
                     source.tenantId(),
                     "workflow-" + source.eventId(),
@@ -282,6 +312,15 @@ public final class KafkaRuntimeRunner {
                             response.isSuccess() ? "medium" : "low"
                     )
             );
+        }
+
+        private static String outputEventType(InboundCommandEvent source) {
+            return switch (source.eventType()) {
+                case "YouTubeChannelSnapshotCaptured" -> "YouTubeChannelInsightGenerated";
+                case "YouTubeChannelActivityCaptured" -> "YouTubeChannelActivityAnalysisGenerated";
+                case "YouTubeCommentReceived", "MockYouTubeCommentReceived" -> "YouTubeCommentAnalysisGenerated";
+                default -> "NewsSummaryGenerated";
+            };
         }
     }
 

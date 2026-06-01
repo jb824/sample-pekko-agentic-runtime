@@ -41,6 +41,38 @@ class GoogleCanonicalPublishTest {
         assertEquals("c-1", event.sourceRecordId());
     }
 
+    @Test
+    void publishesYouTubeChannelSnapshotEvent() throws Exception {
+        CommandEventPublisher publisher = basePublisher();
+        YouTubeChannelSnapshotPayload payload = new YouTubeChannelSnapshotPayload(
+                "ch-1", "Demo Channel", "Demo description", "US", "@demo",
+                "2026-01-01T00:00:00Z", 100L, false, 1000L, 5L, 10L, "uploads-1");
+        String eventId = publisher.publishYouTubeChannelSnapshot("tenant-y", payload, Instant.parse("2026-01-01T00:00:00Z"));
+
+        CanonicalInboundEvent event = publisher.mapper.readValue(capturingEmitter.payload(), CanonicalInboundEvent.class);
+        assertEquals(eventId, event.eventId());
+        assertEquals("youtube", event.source());
+        assertEquals("tenant-y", event.tenantId());
+        assertEquals("YouTubeChannelSnapshotCaptured", event.eventType());
+        assertEquals("ch-1", event.sourceRecordId());
+    }
+
+    @Test
+    void publishesYouTubeChannelActivityEvent() throws Exception {
+        CommandEventPublisher publisher = basePublisher();
+        YouTubeChannelActivityPayload payload = new YouTubeChannelActivityPayload(
+                "activity-1", "ch-1", "Demo Channel", "upload", "New video",
+                "A useful video", "2026-01-01T00:00:00Z", "vid-1", "", "", "", "");
+        String eventId = publisher.publishYouTubeChannelActivity("tenant-y", payload, Instant.parse("2026-01-01T00:00:00Z"));
+
+        CanonicalInboundEvent event = publisher.mapper.readValue(capturingEmitter.payload(), CanonicalInboundEvent.class);
+        assertEquals(eventId, event.eventId());
+        assertEquals("youtube", event.source());
+        assertEquals("tenant-y", event.tenantId());
+        assertEquals("YouTubeChannelActivityCaptured", event.eventType());
+        assertEquals("activity-1", event.sourceRecordId());
+    }
+
     private static CapturingEmitter capturingEmitter;
 
     private static CommandEventPublisher basePublisher() {

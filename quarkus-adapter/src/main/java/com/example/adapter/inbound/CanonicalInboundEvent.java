@@ -17,7 +17,9 @@ public record CanonicalInboundEvent(
         @JsonSubTypes({
                 @JsonSubTypes.Type(value = NewsArticlePayload.class, name = "news-article"),
                 @JsonSubTypes.Type(value = GoogleBusinessProfilePayload.class, name = "google-business-profile-review"),
-                @JsonSubTypes.Type(value = YouTubeCommentPayload.class, name = "youtube-comment")
+                @JsonSubTypes.Type(value = YouTubeCommentPayload.class, name = "youtube-comment"),
+                @JsonSubTypes.Type(value = YouTubeChannelSnapshotPayload.class, name = "youtube-channel-snapshot"),
+                @JsonSubTypes.Type(value = YouTubeChannelActivityPayload.class, name = "youtube-channel-activity")
         })
         Object payload
 ) {

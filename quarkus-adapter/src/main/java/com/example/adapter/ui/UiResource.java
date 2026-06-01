@@ -2,6 +2,8 @@ package com.example.adapter.ui;
 
 import com.example.adapter.inbound.CommandEventPublisher;
 import com.example.adapter.inbound.GoogleBusinessProfilePayload;
+import com.example.adapter.inbound.YouTubeChannelActivityPayload;
+import com.example.adapter.inbound.YouTubeChannelSnapshotPayload;
 import com.example.adapter.inbound.YouTubeCommentPayload;
 import com.example.adapter.outbound.CassandraSummaryWriter;
 import com.example.adapter.outbound.SummaryRecord;
@@ -175,6 +177,97 @@ public class UiResource {
             return webhookResultTemplate
                     .data("success", false)
                     .data("message", "Mock publish failed: " + exception.getMessage());
+        }
+    }
+
+    @POST
+    @Path("/ui/youtube/channel-snapshot")
+    @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
+    @Produces(MediaType.TEXT_HTML)
+    public TemplateInstance publishYouTubeChannelSnapshot(
+            @FormParam("tenantId") String tenantId,
+            @FormParam("channelId") String channelId,
+            @FormParam("title") String title,
+            @FormParam("description") String description,
+            @FormParam("country") String country,
+            @FormParam("subscriberCount") @DefaultValue("0") long subscriberCount,
+            @FormParam("viewCount") @DefaultValue("0") long viewCount,
+            @FormParam("videoCount") @DefaultValue("0") long videoCount,
+            @FormParam("commentCount") @DefaultValue("0") long commentCount,
+            @FormParam("uploadsPlaylistId") String uploadsPlaylistId
+    ) {
+        try {
+            Instant now = Instant.now();
+            YouTubeChannelSnapshotPayload payload = new YouTubeChannelSnapshotPayload(
+                    channelId,
+                    title,
+                    description,
+                    country,
+                    "",
+                    now.toString(),
+                    subscriberCount,
+                    false,
+                    viewCount,
+                    videoCount,
+                    commentCount,
+                    uploadsPlaylistId
+            );
+            String eventId = publisher.publishYouTubeChannelSnapshot(tenantId, payload, now);
+            LOG.infof("ui_youtube event=published type=channel_snapshot event_id=%s channel_id=%s", eventId, channelId);
+            return webhookResultTemplate
+                    .data("success", true)
+                    .data("message", "Accepted YouTube channel snapshot event. Event ID: " + eventId);
+        } catch (Exception exception) {
+            LOG.errorf(exception, "ui_youtube event=failed type=channel_snapshot channel_id=%s", channelId);
+            return webhookResultTemplate
+                    .data("success", false)
+                    .data("message", "Publish failed: " + exception.getMessage());
+        }
+    }
+
+    @POST
+    @Path("/ui/youtube/channel-activity")
+    @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
+    @Produces(MediaType.TEXT_HTML)
+    public TemplateInstance publishYouTubeChannelActivity(
+            @FormParam("tenantId") String tenantId,
+            @FormParam("channelId") String channelId,
+            @FormParam("channelTitle") String channelTitle,
+            @FormParam("activityId") String activityId,
+            @FormParam("activityType") String activityType,
+            @FormParam("title") String title,
+            @FormParam("description") String description,
+            @FormParam("videoId") String videoId,
+            @FormParam("playlistId") String playlistId
+    ) {
+        try {
+            Instant now = Instant.now();
+            String resolvedActivityId = activityId == null || activityId.isBlank()
+                    ? "activity-" + now.toEpochMilli() : activityId;
+            YouTubeChannelActivityPayload payload = new YouTubeChannelActivityPayload(
+                    resolvedActivityId,
+                    channelId,
+                    channelTitle,
+                    activityType,
+                    title,
+                    description,
+                    now.toString(),
+                    videoId,
+                    playlistId,
+                    "",
+                    "",
+                    ""
+            );
+            String eventId = publisher.publishYouTubeChannelActivity(tenantId, payload, now);
+            LOG.infof("ui_youtube event=published type=channel_activity event_id=%s activity_id=%s", eventId, resolvedActivityId);
+            return webhookResultTemplate
+                    .data("success", true)
+                    .data("message", "Accepted YouTube channel activity event. Event ID: " + eventId);
+        } catch (Exception exception) {
+            LOG.errorf(exception, "ui_youtube event=failed type=channel_activity activity_id=%s", activityId);
+            return webhookResultTemplate
+                    .data("success", false)
+                    .data("message", "Publish failed: " + exception.getMessage());
         }
     }
 
