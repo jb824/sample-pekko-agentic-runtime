@@ -1,0 +1,36 @@
+llm:
+  backend: vllm
+  temperature: 0.2
+  ollama:
+    base_url: http://localhost:11434
+    model: granite4:3b
+  vllm:
+    base_url: http://localhost:8000/v1
+    model: ibm-granite/granite-4.1-3b
+    api_key: EMPTY
+    api_type: chat
+    max_tokens: 1024
+    system_prompt: You are a careful assistant. Follow the user request exactly. Return complete, concise answers. Do not invent product names.
+    tokenizer_path: ""
+    grpc:
+      host: localhost
+      port: 50051
+      plaintext: true
+runtime:
+  llm_threads: 4
+  llm_queue_size: 32
+  requests: 1
+workflow:
+  mode: react
+  tools: time.now,arxiv.search
+  max_tools: 3
+  max_steps: 4
+  tool_retry_attempts: 2
+timeouts:
+  llm_seconds: 90
+  workflow_seconds: 180
+  tool_seconds: 25
+prompts:
+  default: Explain the formation of a tornado
+  inline: ""
+  file: ""

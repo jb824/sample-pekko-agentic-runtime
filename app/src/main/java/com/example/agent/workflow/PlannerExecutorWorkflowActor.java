@@ -4,12 +4,8 @@ import com.example.agent.llm.LlmProtocol;
 import com.example.agent.prompts.PromptTemplates;
 import com.example.agent.protocol.AgentRequest;
 import com.example.agent.protocol.AgentResponse;
-import com.example.agent.tool.ArxivSearchToolActor;
-import com.example.agent.tool.PubMedSearchToolActor;
-import com.example.agent.tool.TimeToolActor;
 import com.example.agent.tool.ToolCatalog;
 import com.example.agent.tool.ToolProtocol;
-import com.example.agent.tool.WebSearchToolActor;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.AbstractBehavior;
@@ -336,16 +332,7 @@ public final class PlannerExecutorWorkflowActor extends AbstractBehavior<Planner
     }
 
     private Map<String, String> toolArguments(String toolName) {
-        return switch (toolName) {
-            case TimeToolActor.TOOL_NAME -> Map.of("zone", "UTC");
-            case WebSearchToolActor.TOOL_NAME, ArxivSearchToolActor.TOOL_NAME, PubMedSearchToolActor.TOOL_NAME -> Map.of(
-                    "query",
-                    request.input(),
-                    "maxResults",
-                    "3"
-            );
-            default -> Map.of();
-        };
+        return ToolCatalog.defaultArguments(toolName, request.input(), null);
     }
 
     private List<String> selectTools(String plannerOutput, String userInput) {
@@ -377,18 +364,18 @@ public final class PlannerExecutorWorkflowActor extends AbstractBehavior<Planner
         String input = userInput == null ? "" : userInput.toLowerCase();
         Set<String> tools = new LinkedHashSet<>();
         if (input.contains("time") || input.contains("date") || input.contains("today") || input.contains("now")) {
-            tools.add(TimeToolActor.TOOL_NAME);
+            tools.add(ToolCatalog.TIME_NOW);
         }
         if (input.contains("recent") || input.contains("latest") || input.contains("web") || input.contains("current")) {
-            tools.add(WebSearchToolActor.TOOL_NAME);
+            tools.add(ToolCatalog.WEB_SEARCH);
         }
         if (input.contains("arxiv") || input.contains("paper") || input.contains("research")) {
-            tools.add(ArxivSearchToolActor.TOOL_NAME);
+            tools.add(ToolCatalog.ARXIV_SEARCH);
         }
         if (input.contains("pubmed") || input.contains("treatment") || input.contains("cancer")
                 || input.contains("disease") || input.contains("clinical") || input.contains("drug")
                 || input.contains("therapy") || input.contains("trial")) {
-            tools.add(PubMedSearchToolActor.TOOL_NAME);
+            tools.add(ToolCatalog.PUBMED_SEARCH);
         }
         return List.copyOf(tools);
     }
@@ -402,7 +389,7 @@ public final class PlannerExecutorWorkflowActor extends AbstractBehavior<Planner
 
     private String withSources(String answer) {
         if (sourceUrls.isEmpty()) {
-            return answer;
+            return stripUnverifiedSourcesSection(answer);
         }
 
         boolean answerAlreadyHasUrl = sourceUrls.stream().anyMatch(answer::contains);
@@ -415,6 +402,14 @@ public final class PlannerExecutorWorkflowActor extends AbstractBehavior<Planner
                 .map(url -> "- " + url)
                 .collect(Collectors.joining("\n"));
         return answer.stripTrailing() + "\n\nSources:\n" + sources;
+    }
+
+    private static String stripUnverifiedSourcesSection(String answer) {
+        int sourcesIndex = answer.lastIndexOf("\nSources:");
+        if (sourcesIndex < 0) {
+            return answer;
+        }
+        return answer.substring(0, sourcesIndex).stripTrailing();
     }
 
     private static List<String> sourceUrls(String toolOutput) {

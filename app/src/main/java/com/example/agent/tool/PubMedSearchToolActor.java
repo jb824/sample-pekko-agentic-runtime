@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+@AgentTool(name = ToolCatalog.PUBMED_SEARCH, sourceCapable = true, timeoutSeconds = 8, retryAttempts = 1)
 public final class PubMedSearchToolActor extends AbstractBehavior<ToolProtocol.Command> {
     public static final String TOOL_NAME = "pubmed.search";
 

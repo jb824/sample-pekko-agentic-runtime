@@ -4,12 +4,8 @@ import com.example.agent.llm.LlmProtocol;
 import com.example.agent.prompts.PromptTemplates;
 import com.example.agent.protocol.AgentRequest;
 import com.example.agent.protocol.AgentResponse;
-import com.example.agent.tool.ArxivSearchToolActor;
-import com.example.agent.tool.PubMedSearchToolActor;
-import com.example.agent.tool.TimeToolActor;
 import com.example.agent.tool.ToolCatalog;
 import com.example.agent.tool.ToolProtocol;
-import com.example.agent.tool.WebSearchToolActor;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.AbstractBehavior;
@@ -35,6 +31,7 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
     private final int maxSteps;
     private final Duration workflowTimeout;
     private final Duration toolTimeout;
+    private final int maxToolRetries;
     private final List<String> observations = new ArrayList<>();
     private final List<String> sourceUrls = new ArrayList<>();
     private final Set<String> attemptedTools = new HashSet<>();
@@ -43,6 +40,8 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
     private int stepNumber;
     private int toolCalls;
     private String pendingToolRequestId;
+    private ActionStep pendingActionStep;
+    private int pendingToolAttempt;
     private boolean finalOnly;
     private boolean requiresSources;
 
@@ -53,7 +52,8 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
             int maxTools,
             int maxSteps,
             Duration workflowTimeout,
-            Duration toolTimeout
+            Duration toolTimeout,
+            int maxToolRetries
     ) {
         return Behaviors.setup(context -> new ReActWorkflowActor(
                 context,
@@ -63,7 +63,8 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
                 maxTools,
                 maxSteps,
                 workflowTimeout,
-                toolTimeout
+                toolTimeout,
+                maxToolRetries
         ));
     }
 
@@ -75,7 +76,8 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
             int maxTools,
             int maxSteps,
             Duration workflowTimeout,
-            Duration toolTimeout
+            Duration toolTimeout,
+            int maxToolRetries
     ) {
         super(context);
         this.llmWorker = Objects.requireNonNull(llmWorker);
@@ -85,9 +87,10 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
         this.maxSteps = Math.max(1, maxSteps);
         this.workflowTimeout = Objects.requireNonNull(workflowTimeout);
         this.toolTimeout = Objects.requireNonNull(toolTimeout);
+        this.maxToolRetries = Math.max(0, maxToolRetries);
     }
 
-    public sealed interface Command permits Start, WrappedLlmResponse, WrappedToolResult, ToolTimeout, WorkflowTimeout {
+    public sealed interface Command permits Start, WrappedLlmResponse, WrappedToolResult, ToolTimeout, WorkflowTimeout, RetryTool {
     }
 
     public record Start(
@@ -108,6 +111,9 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
     private record WorkflowTimeout() implements Command {
     }
 
+    private record RetryTool(ActionStep actionStep) implements Command {
+    }
+
     @Override
     public Receive<Command> createReceive() {
         return newReceiveBuilder()
@@ -116,6 +122,7 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
                 .onMessage(WrappedToolResult.class, this::onWrappedToolResult)
                 .onMessage(ToolTimeout.class, this::onToolTimeout)
                 .onMessage(WorkflowTimeout.class, this::onWorkflowTimeout)
+                .onMessage(RetryTool.class, this::onRetryTool)
                 .build();
     }
 
@@ -259,7 +266,9 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
 
         toolCalls++;
         attemptedTools.add(actionStep.toolName());
-        pendingToolRequestId = request.requestId() + ":react:tool:" + toolCalls + ":" + actionStep.toolName();
+        pendingActionStep = actionStep;
+        pendingToolAttempt = 1;
+        pendingToolRequestId = request.requestId() + ":react:tool:" + toolCalls + ":" + actionStep.toolName() + ":attempt:1";
         ActorRef<ToolProtocol.ToolResult> toolAdapter = getContext().messageAdapter(
                 ToolProtocol.ToolResult.class,
                 WrappedToolResult::new
@@ -290,10 +299,12 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
         pendingToolRequestId = null;
 
         if (result.isSuccess()) {
+            pendingActionStep = null;
+            pendingToolAttempt = 0;
             observations.add("OBSERVATION " + toolCalls + " from " + result.toolName() + ":\n" + result.output());
             List<String> urls = sourceUrls(result.output());
             sourceUrls.addAll(urls);
-            if (isSourceTool(result.toolName())) {
+            if (ToolCatalog.isSourceTool(result.toolName())) {
                 getContext().getLog().info(
                         "ReAct tool {} resources for request {}: count={} urls={}",
                         result.toolName(),
@@ -310,7 +321,7 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
                     "tool_response",
                     "tool=" + result.toolName() + " success=true sources=" + urls.size()
             );
-            if (requiresSources && isSourceTool(result.toolName())) {
+            if (requiresSources && ToolCatalog.isSourceTool(result.toolName())) {
                 if (sourceUrls.isEmpty()) {
                     return requestSourceToolOrFail("source tool returned no source URLs");
                 }
@@ -327,9 +338,7 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
                     "tool_response",
                     "tool=" + result.toolName() + " success=false error=" + result.error().getClass().getSimpleName()
             );
-            if (requiresSources && isSourceTool(result.toolName()) && sourceUrls.isEmpty()) {
-                return requestSourceToolOrFail("source tool failed");
-            }
+            return handleToolFailure(result.toolName(), "failed: " + result.error().getMessage());
         }
 
         return requestNextStep();
@@ -349,10 +358,14 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
                 "tool_timeout",
                 "timeout=" + toolTimeout
         );
-        if (requiresSources && sourceUrls.isEmpty()) {
-            return requestSourceToolOrFail("source tool timed out");
+        if (pendingActionStep != null && pendingToolAttempt <= maxToolRetries) {
+            getContext().scheduleOnce(Duration.ofMillis(200L * pendingToolAttempt), getContext().getSelf(), new RetryTool(pendingActionStep));
+            return this;
         }
-        return requestFinalStep();
+        return handleToolFailure(
+                pendingActionStep == null ? "<unknown>" : pendingActionStep.toolName(),
+                "timed out after " + toolTimeout
+        );
     }
 
     private Behavior<Command> onWorkflowTimeout(WorkflowTimeout timeout) {
@@ -405,12 +418,14 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
     }
 
     private Behavior<Command> requestFinalStep() {
-        if (finalOnly || stepNumber >= maxSteps) {
+        if (finalOnly) {
             return finishFromObservations();
         }
 
         finalOnly = true;
-        stepNumber++;
+        if (stepNumber < maxSteps) {
+            stepNumber++;
+        }
         ActorRef<LlmProtocol.Response> responseAdapter = getContext().messageAdapter(
                 LlmProtocol.Response.class,
                 WrappedLlmResponse::new
@@ -451,16 +466,7 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
     }
 
     private Map<String, String> toolArguments(ActionStep actionStep) {
-        return switch (actionStep.toolName()) {
-            case TimeToolActor.TOOL_NAME -> Map.of("zone", actionStep.query().isBlank() ? "UTC" : actionStep.query());
-            case WebSearchToolActor.TOOL_NAME, ArxivSearchToolActor.TOOL_NAME, PubMedSearchToolActor.TOOL_NAME -> Map.of(
-                    "query",
-                    actionStep.query().isBlank() ? request.input() : actionStep.query(),
-                    "maxResults",
-                    "3"
-            );
-            default -> Map.of();
-        };
+        return ToolCatalog.defaultArguments(actionStep.toolName(), request.input(), actionStep.query());
     }
 
     private String allowedToolsText() {
@@ -484,7 +490,7 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
 
     private String withSources(String answer) {
         if (sourceUrls.isEmpty()) {
-            return answer;
+            return stripUnverifiedSourcesSection(answer);
         }
 
         List<String> distinctUrls = sourceUrls.stream()
@@ -499,6 +505,14 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
                 .map(url -> "- " + url)
                 .collect(Collectors.joining("\n"));
         return answer.stripTrailing() + "\n\nSources:\n" + sources;
+    }
+
+    private static String stripUnverifiedSourcesSection(String answer) {
+        int sourcesIndex = answer.lastIndexOf("\nSources:");
+        if (sourcesIndex < 0) {
+            return answer;
+        }
+        return answer.substring(0, sourcesIndex).stripTrailing();
     }
 
     private Behavior<Command> requestSourceToolOrFail(String reason) {
@@ -543,8 +557,8 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
 
     private List<String> preferredSourceTools() {
         return requiresBiomedicalSources(request.input())
-                ? List.of(PubMedSearchToolActor.TOOL_NAME, WebSearchToolActor.TOOL_NAME, ArxivSearchToolActor.TOOL_NAME)
-                : List.of(WebSearchToolActor.TOOL_NAME, PubMedSearchToolActor.TOOL_NAME, ArxivSearchToolActor.TOOL_NAME);
+                ? List.of(ToolCatalog.PUBMED_SEARCH, ToolCatalog.WEB_SEARCH, ToolCatalog.ARXIV_SEARCH)
+                : List.of(ToolCatalog.WEB_SEARCH, ToolCatalog.PUBMED_SEARCH, ToolCatalog.ARXIV_SEARCH);
     }
 
     private static ReActStep parseStep(String output) {
@@ -608,10 +622,44 @@ public final class ReActWorkflowActor extends AbstractBehavior<ReActWorkflowActo
                 .toList();
     }
 
-    private static boolean isSourceTool(String toolName) {
-        return WebSearchToolActor.TOOL_NAME.equals(toolName)
-                || ArxivSearchToolActor.TOOL_NAME.equals(toolName)
-                || PubMedSearchToolActor.TOOL_NAME.equals(toolName);
+    private Behavior<Command> onRetryTool(RetryTool retryTool) {
+        if (pendingActionStep == null || pendingToolRequestId != null) {
+            return this;
+        }
+        pendingToolAttempt++;
+        pendingToolRequestId = request.requestId() + ":react:tool:" + toolCalls + ":" + retryTool.actionStep().toolName()
+                + ":attempt:" + pendingToolAttempt;
+        ActorRef<ToolProtocol.ToolResult> toolAdapter = getContext().messageAdapter(
+                ToolProtocol.ToolResult.class,
+                WrappedToolResult::new
+        );
+        getContext().scheduleOnce(toolTimeout, getContext().getSelf(), new ToolTimeout(pendingToolRequestId));
+        toolRegistry.tell(new ToolProtocol.InvokeTool(
+                pendingToolRequestId,
+                retryTool.actionStep().toolName(),
+                toolArguments(retryTool.actionStep()),
+                toolAdapter
+        ));
+        return this;
+    }
+
+    private Behavior<Command> handleToolFailure(String toolName, String reason) {
+        if (pendingActionStep != null && pendingToolAttempt <= maxToolRetries) {
+            getContext().scheduleOnce(Duration.ofMillis(200L * pendingToolAttempt), getContext().getSelf(), new RetryTool(pendingActionStep));
+            return this;
+        }
+        pendingActionStep = null;
+        pendingToolAttempt = 0;
+        if (requiresSources && ToolCatalog.isSourceTool(toolName) && sourceUrls.isEmpty()) {
+            String fallbackToolName = nextSourceTool();
+            if (fallbackToolName != null) {
+                observations.add("Fallback after " + toolName + " " + reason + ": trying " + fallbackToolName);
+                return invokeTool(new ActionStep(fallbackToolName, request.input()));
+            }
+            observations.add("Source evidence unavailable after tool failures: " + toolName + " " + reason);
+            return requestFinalStep();
+        }
+        return requestNextStep();
     }
 
     private static boolean requiresSources(String input) {

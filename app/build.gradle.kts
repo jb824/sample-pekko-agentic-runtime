@@ -29,6 +29,7 @@ dependencies {
     implementation("org.apache.pekko:pekko-slf4j_2.13")
     implementation("dev.langchain4j:langchain4j-ollama:1.15.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.19.2")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.19.2")
     implementation("com.google.protobuf:protobuf-java:4.32.1")
     implementation("ai.djl.huggingface:tokenizers:0.35.0")
     implementation("io.grpc:grpc-netty-shaded:1.76.0")

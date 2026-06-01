@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+@AgentTool(name = ToolCatalog.WEB_SEARCH, sourceCapable = true, timeoutSeconds = 8, retryAttempts = 1)
 public final class WebSearchToolActor extends AbstractBehavior<ToolProtocol.Command> {
     public static final String TOOL_NAME = "web.search";
 

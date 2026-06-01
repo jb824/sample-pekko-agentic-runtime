@@ -21,13 +21,20 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
+@AgentTool(name = ToolCatalog.ARXIV_SEARCH, sourceCapable = true, timeoutSeconds = 45, retryAttempts = 2)
 public final class ArxivSearchToolActor extends AbstractBehavior<ToolProtocol.Command> {
     public static final String TOOL_NAME = "arxiv.search";
     private static final String USER_AGENT = "pekko-agent-runtime/0.1 (+https://localhost)";
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(45);
+    private static final Duration REQUEST_SPACING = Duration.ofSeconds(3);
+    private static final int MAX_ATTEMPTS = 3;
     private static final int MAX_QUERY_TERMS = 8;
+    private static final int MAX_RESULTS_CAP = 25;
+    private static final AtomicLong NEXT_ALLOWED_REQUEST_MILLIS = new AtomicLong(0L);
 
     private final HttpClient httpClient;
 
@@ -52,21 +59,17 @@ public final class ArxivSearchToolActor extends AbstractBehavior<ToolProtocol.Co
     private Behavior<ToolProtocol.Command> onInvokeTool(ToolProtocol.InvokeTool command) {
         getContext().getLog().info("Tool {} invoked for request {}", command.toolName(), command.requestId());
         String query = normalizeQuery(command.arguments().getOrDefault("query", ""));
+        if (query.isBlank()) {
+            command.replyTo().tell(failed(command, new IllegalArgumentException("arXiv query must not be blank")));
+            return this;
+        }
         int maxResults = parseMaxResults(command.arguments().get("maxResults"));
         String encodedQuery = URLEncoder.encode("all:" + query, StandardCharsets.UTF_8);
         URI uri = URI.create("https://export.arxiv.org/api/query?search_query=" + encodedQuery
-                + "&start=0&max_results=" + maxResults);
+                + "&start=0&max_results=" + maxResults
+                + "&sortBy=lastUpdatedDate&sortOrder=descending");
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(uri)
-                .timeout(REQUEST_TIMEOUT)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "application/atom+xml, application/xml, text/xml")
-                .GET()
-                .build();
-
-        httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .orTimeout(REQUEST_TIMEOUT.plusSeconds(5).toMillis(), TimeUnit.MILLISECONDS)
+        sendWithRetry(uri, 1)
                 .whenComplete((response, failure) -> {
                     if (failure != null) {
                         command.replyTo().tell(failed(command, failure));
@@ -95,6 +98,56 @@ public final class ArxivSearchToolActor extends AbstractBehavior<ToolProtocol.Co
         return this;
     }
 
+    private CompletableFuture<HttpResponse<String>> sendWithRetry(URI uri, int attempt) {
+        return sendRespectingRateLimit(uri)
+                .thenCompose(response -> {
+                    if (isSuccess(response.statusCode())) {
+                        return CompletableFuture.completedFuture(response);
+                    }
+                    if (attempt >= MAX_ATTEMPTS || !isRetryableStatus(response.statusCode())) {
+                        return CompletableFuture.failedFuture(
+                                new IllegalStateException("arXiv search returned HTTP " + response.statusCode())
+                        );
+                    }
+                    long backoffMs = backoffMillis(attempt);
+                    return CompletableFuture.supplyAsync(
+                            () -> null,
+                            CompletableFuture.delayedExecutor(backoffMs, TimeUnit.MILLISECONDS)
+                    ).thenCompose(ignored -> sendWithRetry(uri, attempt + 1));
+                })
+                .exceptionallyCompose(failure -> {
+                    if (attempt >= MAX_ATTEMPTS) {
+                        return CompletableFuture.failedFuture(failure);
+                    }
+                    long backoffMs = backoffMillis(attempt);
+                    return CompletableFuture.supplyAsync(
+                            () -> null,
+                            CompletableFuture.delayedExecutor(backoffMs, TimeUnit.MILLISECONDS)
+                    ).thenCompose(ignored -> sendWithRetry(uri, attempt + 1));
+                });
+    }
+
+    private CompletableFuture<HttpResponse<String>> sendRespectingRateLimit(URI uri) {
+        long now = System.currentTimeMillis();
+        long reserved = NEXT_ALLOWED_REQUEST_MILLIS.updateAndGet(previous -> Math.max(previous, now) + REQUEST_SPACING.toMillis());
+        long delayMs = Math.max(0L, reserved - REQUEST_SPACING.toMillis() - now);
+
+        return CompletableFuture.supplyAsync(
+                () -> null,
+                CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS)
+        ).thenCompose(ignored -> {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(uri)
+                    .timeout(REQUEST_TIMEOUT)
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept", "application/atom+xml, application/xml, text/xml")
+                    .GET()
+                    .build();
+            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .orTimeout(REQUEST_TIMEOUT.plusSeconds(5).toMillis(), TimeUnit.MILLISECONDS);
+        });
+    }
+
     private static ToolProtocol.ToolResult succeeded(
             ToolProtocol.InvokeTool command,
             String body,
@@ -103,6 +156,11 @@ public final class ArxivSearchToolActor extends AbstractBehavior<ToolProtocol.Co
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setXIncludeAware(false);
+            factory.setExpandEntityReferences(false);
             factory.setNamespaceAware(true);
             Document document = factory.newDocumentBuilder().parse(new InputSource(new StringReader(body)));
             NodeList entries = document.getElementsByTagNameNS("*", "entry");
@@ -153,7 +211,7 @@ public final class ArxivSearchToolActor extends AbstractBehavior<ToolProtocol.Co
         if (value == null || value.isBlank()) {
             return 3;
         }
-        return Math.max(1, Integer.parseInt(value));
+        return Math.min(MAX_RESULTS_CAP, Math.max(1, Integer.parseInt(value)));
     }
 
     private static String normalizeQuery(String query) {
@@ -187,6 +245,23 @@ public final class ArxivSearchToolActor extends AbstractBehavior<ToolProtocol.Co
 
     private static ToolProtocol.ToolResult failed(ToolProtocol.InvokeTool command, Throwable error) {
         return new ToolProtocol.ToolResult(command.requestId(), command.toolName(), "", error);
+    }
+
+    private static boolean isSuccess(int statusCode) {
+        return statusCode >= 200 && statusCode < 300;
+    }
+
+    private static boolean isRetryableStatus(int statusCode) {
+        return statusCode == 408 || statusCode == 425 || statusCode == 429 || statusCode == 500
+                || statusCode == 502 || statusCode == 503 || statusCode == 504;
+    }
+
+    private static long backoffMillis(int attempt) {
+        return switch (attempt) {
+            case 1 -> 800L;
+            case 2 -> 1600L;
+            default -> 2400L;
+        };
     }
 
     private record Resource(String title, String snippet, String url) {

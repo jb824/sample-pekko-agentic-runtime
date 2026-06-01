@@ -42,6 +42,13 @@ Current tools:
 ./gradlew run
 ```
 
+Runtime config is now YAML-first with env overrides:
+
+- default file: `config/agent.yaml`
+- override file path: `AGENT_CONFIG_FILE=/path/to/agent.yaml`
+- environment variables still override YAML values
+- if `AGENT_PROMPT`, `AGENT_PROMPTS`, or `AGENT_PROMPTS_FILE` is set in your shell, YAML `prompts.*` values will be ignored
+
 Useful environment variables:
 
 ```bash
@@ -50,6 +57,7 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=granite4:3b
 AGENT_WORKFLOW=planner-executor
 AGENT_TOOLS=time.now
+AGENT_TOOL_RETRY_ATTEMPTS=2
 AGENT_PROMPT="Explain Apache Pekko typed actors in one practical paragraph."
 ```
 

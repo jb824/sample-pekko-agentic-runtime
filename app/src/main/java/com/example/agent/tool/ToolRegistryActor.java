@@ -1,6 +1,5 @@
 package com.example.agent.tool;
 
-import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.AbstractBehavior;
 import org.apache.pekko.actor.typed.javadsl.ActorContext;
@@ -8,23 +7,18 @@ import org.apache.pekko.actor.typed.javadsl.Behaviors;
 import org.apache.pekko.actor.typed.javadsl.Receive;
 
 import java.util.Objects;
+import java.util.Map;
 
 public final class ToolRegistryActor extends AbstractBehavior<ToolProtocol.Command> {
-    private final ActorRef<ToolProtocol.Command> timeTool;
-    private final ActorRef<ToolProtocol.Command> webSearchTool;
-    private final ActorRef<ToolProtocol.Command> arxivSearchTool;
-    private final ActorRef<ToolProtocol.Command> pubMedSearchTool;
+    private final Map<String, ToolDefinition> definitions;
 
     public static Behavior<ToolProtocol.Command> create() {
-        return Behaviors.setup(ToolRegistryActor::new);
+        return Behaviors.setup(context -> new ToolRegistryActor(context, ToolDefinitionCatalog.create(context)));
     }
 
-    private ToolRegistryActor(ActorContext<ToolProtocol.Command> context) {
+    private ToolRegistryActor(ActorContext<ToolProtocol.Command> context, Map<String, ToolDefinition> definitions) {
         super(context);
-        this.timeTool = context.spawn(TimeToolActor.create(), "time-tool");
-        this.webSearchTool = context.spawn(WebSearchToolActor.create(), "web-search-tool");
-        this.arxivSearchTool = context.spawn(ArxivSearchToolActor.create(), "arxiv-search-tool");
-        this.pubMedSearchTool = context.spawn(PubMedSearchToolActor.create(), "pubmed-search-tool");
+        this.definitions = Objects.requireNonNull(definitions);
     }
 
     @Override
@@ -36,18 +30,17 @@ public final class ToolRegistryActor extends AbstractBehavior<ToolProtocol.Comma
 
     private Behavior<ToolProtocol.Command> onInvokeTool(ToolProtocol.InvokeTool command) {
         Objects.requireNonNull(command.toolName());
-        switch (command.toolName()) {
-            case TimeToolActor.TOOL_NAME -> timeTool.tell(command);
-            case WebSearchToolActor.TOOL_NAME -> webSearchTool.tell(command);
-            case ArxivSearchToolActor.TOOL_NAME -> arxivSearchTool.tell(command);
-            case PubMedSearchToolActor.TOOL_NAME -> pubMedSearchTool.tell(command);
-            default -> command.replyTo().tell(new ToolProtocol.ToolResult(
-                        command.requestId(),
-                        command.toolName(),
-                        "",
-                        new IllegalArgumentException("Unknown tool: " + command.toolName())
-                ));
+        ToolDefinition definition = definitions.get(command.toolName());
+        if (definition == null) {
+            command.replyTo().tell(new ToolProtocol.ToolResult(
+                    command.requestId(),
+                    command.toolName(),
+                    "",
+                    new IllegalArgumentException("Unknown tool: " + command.toolName())
+            ));
+            return this;
         }
+        definition.invoker().invoke(command);
         return this;
     }
 }

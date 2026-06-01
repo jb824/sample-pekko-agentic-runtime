@@ -9,6 +9,8 @@ import com.example.agent.protocol.AgentRequest;
 import com.example.agent.protocol.AgentResponse;
 import com.example.agent.tool.ToolProtocol;
 import com.example.agent.tool.ToolRegistryActor;
+import com.example.agent.workflow.WorkflowCatalog;
+import com.example.agent.workflow.WorkflowSpec;
 import dev.langchain4j.model.chat.ChatModel;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.ActorSystem;
@@ -50,17 +52,23 @@ public final class Main {
                     ToolRegistryActor.create(),
                     "tool-registry"
             );
-            GatewayActor.WorkflowKind workflowKind = GatewayActor.WorkflowKind.fromConfig(config.workflowMode());
+            WorkflowSpec workflowSpec = WorkflowCatalog.fromConfig(config).resolve(config.workflowMode());
+            context.getLog().info(
+                    "Loaded runtime config from {} (file-loaded={} env-overrides-active={})",
+                    config.configPath(),
+                    config.configFileLoaded(),
+                    config.hasPromptEnvOverrides()
+            );
+            if (config.hasPromptEnvOverrides()) {
+                context.getLog().warn(
+                        "Prompt-related environment overrides detected (AGENT_PROMPT/AGENT_PROMPTS/AGENT_PROMPTS_FILE); these take precedence over YAML prompt settings."
+                );
+            }
             ActorRef<GatewayActor.Command> gateway = context.spawn(
                     GatewayActor.create(
                             llmWorker,
                             toolRegistry,
-                            workflowKind,
-                            config.enabledTools(),
-                            config.maxTools(),
-                            config.maxSteps(),
-                            config.workflowTimeout(),
-                            config.toolTimeout()
+                            workflowSpec
                     ),
                     "gateway"
             );
@@ -77,7 +85,7 @@ public final class Main {
                 context.getLog().info(
                         "Submitting request {} using {} workflow on {} backend",
                         requestId,
-                        workflowKind,
+                        workflowSpec.name(),
                         config.llmBackend()
                 );
                 gateway.tell(new GatewayActor.HandleRequest(request, context.getSelf()));

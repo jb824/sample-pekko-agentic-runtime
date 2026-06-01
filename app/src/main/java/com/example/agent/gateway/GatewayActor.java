@@ -4,9 +4,12 @@ import com.example.agent.llm.LlmProtocol;
 import com.example.agent.protocol.AgentRequest;
 import com.example.agent.protocol.AgentResponse;
 import com.example.agent.tool.ToolProtocol;
+import com.example.agent.tool.ToolCatalog;
 import com.example.agent.workflow.PlannerExecutorWorkflowActor;
 import com.example.agent.workflow.ReActWorkflowActor;
 import com.example.agent.workflow.ResearchWorkflowActor;
+import com.example.agent.workflow.WorkflowEngine;
+import com.example.agent.workflow.WorkflowSpec;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.AbstractBehavior;
@@ -14,39 +17,23 @@ import org.apache.pekko.actor.typed.javadsl.ActorContext;
 import org.apache.pekko.actor.typed.javadsl.Behaviors;
 import org.apache.pekko.actor.typed.javadsl.Receive;
 
-import java.util.Locale;
 import java.util.Objects;
 
 public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
     private final ActorRef<LlmProtocol.Command> llmWorker;
     private final ActorRef<ToolProtocol.Command> toolRegistry;
-    private final WorkflowKind workflowKind;
-    private final String enabledTools;
-    private final int maxTools;
-    private final int maxSteps;
-    private final java.time.Duration workflowTimeout;
-    private final java.time.Duration toolTimeout;
+    private final WorkflowSpec workflowSpec;
 
     public static Behavior<Command> create(
             ActorRef<LlmProtocol.Command> llmWorker,
             ActorRef<ToolProtocol.Command> toolRegistry,
-            WorkflowKind workflowKind,
-            String enabledTools,
-            int maxTools,
-            int maxSteps,
-            java.time.Duration workflowTimeout,
-            java.time.Duration toolTimeout
+            WorkflowSpec workflowSpec
     ) {
         return Behaviors.setup(context -> new GatewayActor(
                 context,
                 llmWorker,
                 toolRegistry,
-                workflowKind,
-                enabledTools,
-                maxTools,
-                maxSteps,
-                workflowTimeout,
-                toolTimeout
+                workflowSpec
         ));
     }
 
@@ -54,22 +41,12 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
             ActorContext<Command> context,
             ActorRef<LlmProtocol.Command> llmWorker,
             ActorRef<ToolProtocol.Command> toolRegistry,
-            WorkflowKind workflowKind,
-            String enabledTools,
-            int maxTools,
-            int maxSteps,
-            java.time.Duration workflowTimeout,
-            java.time.Duration toolTimeout
+            WorkflowSpec workflowSpec
     ) {
         super(context);
         this.llmWorker = Objects.requireNonNull(llmWorker);
         this.toolRegistry = Objects.requireNonNull(toolRegistry);
-        this.workflowKind = Objects.requireNonNull(workflowKind);
-        this.enabledTools = Objects.requireNonNull(enabledTools);
-        this.maxTools = maxTools;
-        this.maxSteps = maxSteps;
-        this.workflowTimeout = Objects.requireNonNull(workflowTimeout);
-        this.toolTimeout = Objects.requireNonNull(toolTimeout);
+        this.workflowSpec = Objects.requireNonNull(workflowSpec);
     }
 
     public sealed interface Command permits HandleRequest {
@@ -81,22 +58,6 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
     ) implements Command {
     }
 
-    public enum WorkflowKind {
-        RESEARCH,
-        PLANNER_EXECUTOR,
-        REACT;
-
-        public static WorkflowKind fromConfig(String value) {
-            String normalized = value == null ? "" : value.toLowerCase(Locale.ROOT).trim();
-            return switch (normalized) {
-                case "research" -> RESEARCH;
-                case "planner", "planner-executor", "planner_executor" -> PLANNER_EXECUTOR;
-                case "react", "re-act", "re_act" -> REACT;
-                default -> throw new IllegalArgumentException("Unsupported workflow mode: " + value);
-            };
-        }
-    }
-
     @Override
     public Receive<Command> createReceive() {
         return newReceiveBuilder()
@@ -105,7 +66,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
     }
 
     private Behavior<Command> onHandleRequest(HandleRequest command) {
-        switch (workflowKind) {
+        switch (workflowSpec.engine()) {
             case RESEARCH -> {
                 ActorRef<ResearchWorkflowActor.Command> workflow = getContext().spawn(
                         ResearchWorkflowActor.create(llmWorker),
@@ -118,10 +79,10 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
                         PlannerExecutorWorkflowActor.create(
                                 llmWorker,
                                 toolRegistry,
-                                enabledTools,
-                                maxTools,
-                                workflowTimeout,
-                                toolTimeout
+                                String.join(",", workflowSpec.defaultTools()),
+                                workflowSpec.maxTools(),
+                                workflowSpec.workflowTimeout(),
+                                workflowSpec.toolTimeout()
                         ),
                         "planner-executor-workflow-" + command.request().requestId()
                 );
@@ -132,11 +93,12 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
                         ReActWorkflowActor.create(
                                 llmWorker,
                                 toolRegistry,
-                                enabledTools,
-                                maxTools,
-                                maxSteps,
-                                workflowTimeout,
-                                toolTimeout
+                                String.join(",", workflowSpec.defaultTools()),
+                                workflowSpec.maxTools(),
+                                workflowSpec.maxSteps(),
+                                workflowSpec.workflowTimeout(),
+                                workflowSpec.toolTimeout(),
+                                workflowSpec.maxToolRetries()
                         ),
                         "react-workflow-" + command.request().requestId()
                 );
