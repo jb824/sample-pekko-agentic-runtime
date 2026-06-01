@@ -26,7 +26,9 @@ dependencies {
 
     implementation(platform("org.apache.pekko:pekko-bom_2.13:1.6.0"))
     implementation("org.apache.pekko:pekko-actor-typed_2.13")
+    implementation("org.apache.pekko:pekko-stream_2.13")
     implementation("org.apache.pekko:pekko-slf4j_2.13")
+    implementation("org.apache.pekko:pekko-http_2.13:1.3.0")
     implementation("dev.langchain4j:langchain4j-ollama:1.15.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.19.2")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.19.2")
@@ -35,6 +37,10 @@ dependencies {
     implementation("io.grpc:grpc-netty-shaded:1.76.0")
     implementation("io.grpc:grpc-protobuf:1.76.0")
     implementation("io.grpc:grpc-stub:1.76.0")
+    implementation("io.grpc:grpc-services:1.76.0")
+    implementation("io.opentelemetry:opentelemetry-api:1.45.0")
+    implementation("io.opentelemetry:opentelemetry-sdk:1.45.0")
+    implementation("io.opentelemetry:opentelemetry-exporter-otlp:1.45.0")
     compileOnly("org.apache.tomcat:annotations-api:6.0.53")
 
     runtimeOnly("ch.qos.logback:logback-classic:1.5.18")

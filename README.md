@@ -42,6 +42,23 @@ Current tools:
 ./gradlew run
 ```
 
+## Run As Service (HTTP + gRPC)
+
+```bash
+AGENT_RUN_MODE=server \
+AGENT_ENABLE_HTTP=true \
+AGENT_ENABLE_GRPC=true \
+AGENT_HTTP_HOST=0.0.0.0 \
+AGENT_HTTP_PORT=8080 \
+AGENT_GRPC_PORT=8081 \
+./gradlew run
+```
+
+HTTP endpoints:
+
+- `GET /health`
+- `POST /v1/agent/invoke` JSON body: `{"requestId":"...", "input":"...", "timeoutMs":60000}`
+
 Runtime config is now YAML-first with env overrides:
 
 - default file: `config/agent.yaml`

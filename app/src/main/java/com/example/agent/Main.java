@@ -1,17 +1,23 @@
 package com.example.agent;
 
+import com.example.agent.adapter.grpc.GrpcServerAdapter;
+import com.example.agent.adapter.http.PekkoHttpAdapter;
 import com.example.agent.config.AppConfig;
 import com.example.agent.gateway.GatewayActor;
 import com.example.agent.llm.ChatModelFactory;
 import com.example.agent.llm.LlmProtocol;
 import com.example.agent.llm.LlmWorkerActor;
 import com.example.agent.protocol.AgentRequest;
-import com.example.agent.protocol.AgentResponse;
+import com.example.agent.runtime.ActorAgentRuntimeService;
+import com.example.agent.runtime.AgentError;
+import com.example.agent.runtime.AgentResult;
+import com.example.agent.runtime.telemetry.TelemetryBootstrap;
 import com.example.agent.tool.ToolProtocol;
 import com.example.agent.tool.ToolRegistryActor;
 import com.example.agent.workflow.WorkflowCatalog;
 import com.example.agent.workflow.WorkflowSpec;
 import dev.langchain4j.model.chat.ChatModel;
+import io.grpc.Server;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.ActorSystem;
 import org.apache.pekko.actor.typed.Behavior;
@@ -32,6 +38,7 @@ public final class Main {
     }
 
     public static void main(String[] args) {
+        TelemetryBootstrap.initialize();
         AppConfig config = AppConfig.fromEnvironment();
         ChatModel model = ChatModelFactory.create(config);
         ExecutorService llmExecutor = new ThreadPoolExecutor(
@@ -43,7 +50,8 @@ public final class Main {
                 namedThreadFactory("llm-worker")
         );
 
-        Behavior<AgentResponse> root = Behaviors.setup(context -> {
+        String runMode = System.getenv().getOrDefault("AGENT_RUN_MODE", "cli").trim().toLowerCase();
+        Behavior<AgentResult> root = Behaviors.setup(context -> {
             ActorRef<LlmProtocol.Command> llmWorker = context.spawn(
                     LlmWorkerActor.create(model, llmExecutor),
                     "llm-worker"
@@ -77,6 +85,42 @@ public final class Main {
             Map<String, Long> startTimes = new HashMap<>();
             long runStarted = System.nanoTime();
             String requestGroupId = UUID.randomUUID().toString();
+            ActorAgentRuntimeService runtimeService = new ActorAgentRuntimeService(gateway, context.getSystem().scheduler());
+            if ("server".equals(runMode)) {
+                String httpHost = System.getenv().getOrDefault("AGENT_HTTP_HOST", "0.0.0.0");
+                int httpPort = Integer.parseInt(System.getenv().getOrDefault("AGENT_HTTP_PORT", "8080"));
+                int grpcPort = Integer.parseInt(System.getenv().getOrDefault("AGENT_GRPC_PORT", "8081"));
+                boolean enableHttp = Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_ENABLE_HTTP", "true"));
+                boolean enableGrpc = Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_ENABLE_GRPC", "true"));
+
+                if (enableHttp) {
+                    PekkoHttpAdapter.start(context.getSystem(), runtimeService, httpHost, httpPort)
+                            .whenComplete((binding, failure) -> {
+                                if (failure != null) {
+                                    context.getLog().error("Failed to start Pekko HTTP adapter", failure);
+                                    context.getSystem().terminate();
+                                } else {
+                                    context.getLog().info("Pekko HTTP adapter listening on {}:{}", httpHost, httpPort);
+                                }
+                            });
+                }
+
+                if (enableGrpc) {
+                    try {
+                        Server grpcServer = GrpcServerAdapter.start(grpcPort, runtimeService);
+                        context.getLog().info("gRPC adapter listening on {}", grpcPort);
+                        context.getSystem().getWhenTerminated().whenComplete((done, err) -> grpcServer.shutdown());
+                    } catch (Exception exception) {
+                        context.getLog().error("Failed to start gRPC adapter", exception);
+                        context.getSystem().terminate();
+                    }
+                }
+
+                return Behaviors.receive(AgentResult.class)
+                        .onMessage(AgentResult.class, ignored -> Behaviors.same())
+                        .build();
+            }
+
             for (int i = 1; i <= config.requestCount(); i++) {
                 String requestId = config.requestCount() == 1 ? requestGroupId : requestGroupId + "-" + i;
                 AgentRequest request = new AgentRequest(requestId, config.promptForRequest(i));
@@ -88,15 +132,28 @@ public final class Main {
                         workflowSpec.name(),
                         config.llmBackend()
                 );
-                gateway.tell(new GatewayActor.HandleRequest(request, context.getSelf()));
+                runtimeService.invoke(request, config.workflowTimeout())
+                        .whenComplete((result, failure) -> {
+                            if (failure != null) {
+                                context.getSelf().tell(new AgentResult(
+                                        requestId,
+                                        com.example.agent.runtime.AgentStatus.FAILED_SYSTEM,
+                                        "",
+                                        java.util.List.of(),
+                                        java.util.List.of(new AgentError("runtime_invoke_failure", failure.getMessage(), true, "runtime"))
+                                ));
+                            } else {
+                                context.getSelf().tell(result);
+                            }
+                        });
             }
 
             AtomicInteger remaining = new AtomicInteger(config.requestCount());
             AtomicInteger successes = new AtomicInteger();
             AtomicInteger failures = new AtomicInteger();
 
-            return Behaviors.receive(AgentResponse.class)
-                    .onMessage(AgentResponse.class, response -> {
+            return Behaviors.receive(AgentResult.class)
+                    .onMessage(AgentResult.class, response -> {
                         printResponse(requests.get(response.requestId()), response);
                         long latencyMs = TimeUnit.NANOSECONDS.toMillis(
                                 System.nanoTime() - startTimes.getOrDefault(response.requestId(), runStarted)
@@ -126,7 +183,7 @@ public final class Main {
                     .build();
         });
 
-        ActorSystem<AgentResponse> system = ActorSystem.create(root, "pekko-llm-agent-runtime");
+        ActorSystem<AgentResult> system = ActorSystem.create(root, "pekko-llm-agent-runtime");
         system.getWhenTerminated().toCompletableFuture().join();
         shutdownExecutor(llmExecutor);
     }
@@ -140,14 +197,16 @@ public final class Main {
         };
     }
 
-    private static void printResponse(AgentRequest request, AgentResponse response) {
+    private static void printResponse(AgentRequest request, AgentResult response) {
         String input = request == null ? "<unknown request>" : request.input();
         System.out.println("Request " + response.requestId() + ": " + input);
         if (response.isSuccess()) {
             System.out.println("Answer: " + response.output());
         } else {
-            System.err.println("Request failed: " + response.error().getClass().getSimpleName()
-                    + ": " + response.error().getMessage());
+            String errorText = response.errors().isEmpty()
+                    ? "<no error>"
+                    : response.errors().stream().map(AgentError::message).collect(java.util.stream.Collectors.joining("; "));
+            System.err.println("Request failed: " + response.status() + ": " + errorText);
         }
     }
 

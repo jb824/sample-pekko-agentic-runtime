@@ -1,7 +1,10 @@
 package com.example.agent.tool;
 
 import org.apache.pekko.actor.typed.ActorRef;
+import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.ActorContext;
+import org.apache.pekko.actor.typed.javadsl.Behaviors;
+import org.apache.pekko.actor.typed.SupervisorStrategy;
 
 import java.time.Clock;
 import java.util.LinkedHashMap;
@@ -17,13 +20,22 @@ public final class ToolDefinitionCatalog {
         TimeToolHandler timeToolHandler = new TimeToolHandler(Clock.systemUTC());
         register(definitions, TimeToolHandler.class, command -> command.replyTo().tell(timeToolHandler.invoke(command)));
 
-        ActorRef<ToolProtocol.Command> webSearchTool = context.spawn(WebSearchToolActor.create(), "web-search-tool");
+        ActorRef<ToolProtocol.Command> webSearchTool = context.spawn(
+                supervised(WebSearchToolActor.create()),
+                "web-search-tool"
+        );
         register(definitions, WebSearchToolActor.class, webSearchTool::tell);
 
-        ActorRef<ToolProtocol.Command> arxivSearchTool = context.spawn(ArxivSearchToolActor.create(), "arxiv-search-tool");
+        ActorRef<ToolProtocol.Command> arxivSearchTool = context.spawn(
+                supervised(ArxivSearchToolActor.create()),
+                "arxiv-search-tool"
+        );
         register(definitions, ArxivSearchToolActor.class, arxivSearchTool::tell);
 
-        ActorRef<ToolProtocol.Command> pubMedSearchTool = context.spawn(PubMedSearchToolActor.create(), "pubmed-search-tool");
+        ActorRef<ToolProtocol.Command> pubMedSearchTool = context.spawn(
+                supervised(PubMedSearchToolActor.create()),
+                "pubmed-search-tool"
+        );
         register(definitions, PubMedSearchToolActor.class, pubMedSearchTool::tell);
 
         return Map.copyOf(definitions);
@@ -47,5 +59,14 @@ public final class ToolDefinitionCatalog {
                         invoker
                 )
         );
+    }
+
+    private static Behavior<ToolProtocol.Command> supervised(Behavior<ToolProtocol.Command> behavior) {
+        return Behaviors.supervise(behavior)
+                .onFailure(SupervisorStrategy.restartWithBackoff(
+                        java.time.Duration.ofSeconds(1),
+                        java.time.Duration.ofSeconds(10),
+                        0.2
+                ));
     }
 }

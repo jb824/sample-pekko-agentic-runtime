@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package com.example.agent.runtime.grpc;
+
+option java_multiple_files = true;
+option java_package = "com.example.agent.runtime.grpc";
+
+service AgentRuntime {
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message InvokeRequest {
+  string request_id = 1;
+  string input = 2;
+  int64 timeout_ms = 3;
+}
+
+message InvokeResponse {
+  string request_id = 1;
+  string status = 2;
+  string output = 3;
+  repeated string sources = 4;
+  repeated Error errors = 5;
+}
+
+message Error {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+  string component = 4;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}
