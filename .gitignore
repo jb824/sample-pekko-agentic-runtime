@@ -1,5 +1,6 @@
 # Ignore Gradle project-specific cache directory
 .gradle
+.gradle-home/
 
 # Ignore Gradle build output directory
 build
@@ -18,6 +19,7 @@ build/
 *.jar
 *.war
 *.ear
+!gradle/wrapper/gradle-wrapper.jar
 hs_err_pid*
 replay_pid*
 # Local env and secrets
