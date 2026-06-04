@@ -1,7 +1,8 @@
-package com.example.agent.tool;
+package com.example.agent.runtime.tool;
 
 import org.apache.pekko.actor.typed.ActorRef;
 
+import java.util.List;
 import java.util.Map;
 
 public final class ToolProtocol {
@@ -13,7 +14,9 @@ public final class ToolProtocol {
 
     public record InvokeTool(
             String requestId,
+            String tenantId,
             String toolName,
+            String userInput,
             Map<String, String> arguments,
             ActorRef<ToolResult> replyTo
     ) implements Command {
@@ -23,8 +26,13 @@ public final class ToolProtocol {
             String requestId,
             String toolName,
             String output,
+            List<String> sources,
             Throwable error
     ) {
+        public ToolResult {
+            sources = sources == null ? List.of() : List.copyOf(sources);
+        }
+
         public boolean isSuccess() {
             return error == null;
         }

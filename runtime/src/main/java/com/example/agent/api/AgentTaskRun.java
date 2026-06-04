@@ -1,16 +1,13 @@
-package com.example.agent.client;
-
-import com.example.agent.api.AgentComponentClient;
-import com.example.agent.api.AgentTaskState;
+package com.example.agent.api;
 
 import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 
-public final class AgentRun {
+public final class AgentTaskRun {
     private final AgentComponentClient componentClient;
     private final String taskId;
 
-    AgentRun(AgentComponentClient componentClient, String taskId) {
+    AgentTaskRun(AgentComponentClient componentClient, String taskId) {
         this.componentClient = Objects.requireNonNull(componentClient);
         this.taskId = Objects.requireNonNull(taskId);
     }

@@ -13,8 +13,7 @@ import com.example.agent.runtime.memory.AgentMemoryEvent;
 import com.example.agent.runtime.memory.AgentMemoryEventType;
 import com.example.agent.runtime.memory.AgentMemoryKey;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
-import com.example.agent.tool.ToolCatalog;
-import com.example.agent.tool.ToolProtocol;
+import com.example.agent.runtime.tool.ToolProtocol;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.AbstractBehavior;
@@ -171,8 +170,10 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
         getContext().scheduleOnce(toolTimeout, getContext().getSelf(), new ToolTimeout(toolName));
         toolRegistry.tell(new ToolProtocol.InvokeTool(
                 request.requestId() + ":agent-system:tool:" + pendingToolIndex + ":" + toolName,
+                request.tenantId(),
                 toolName,
-                ToolCatalog.defaultArguments(toolName, request.input(), null),
+                request.input(),
+                Map.of(),
                 adapter
         ));
         return this;
@@ -182,7 +183,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
         ToolProtocol.ToolResult result = wrapped.result();
         if (result.isSuccess()) {
             observations.add("Tool " + result.toolName() + ":\n" + result.output());
-            sources.addAll(sourceUrls(result.output()));
+            sources.addAll(result.sources());
         } else {
             observations.add("Tool " + result.toolName() + " failed: " + result.error().getMessage());
         }
@@ -484,7 +485,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                 tools.addAll(agent.tools());
             }
         }
-        return tools.stream().filter(ToolCatalog::isKnownTool).toList();
+        return List.copyOf(tools);
     }
 
     private static List<AgentDefinition> delegatesFor(AgentSystemDefinition system) {

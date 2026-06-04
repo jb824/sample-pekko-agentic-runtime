@@ -1,5 +1,6 @@
 package com.example.agent.http;
 
+import com.example.agent.api.AgentEndpoint;
 import com.example.agent.api.AgentSystem;
 import com.example.agent.api.AgentTask;
 
@@ -31,6 +32,21 @@ public final class AgentHttpEndpoint {
 
     public static AgentHttpEndpoint sync(String path, AgentSystem system, String taskType) {
         return sync(path, system, request -> AgentTask.of(taskType).instructions(request.input()).build());
+    }
+
+    public static AgentHttpEndpoint from(AgentEndpoint endpoint) {
+        return switch (endpoint.mode()) {
+            case SYNC -> sync(
+                    endpoint.path(),
+                    endpoint.workflow().system(),
+                    request -> endpoint.taskFor(request.input())
+            );
+            case ASYNC -> async(
+                    endpoint.path(),
+                    endpoint.workflow().system(),
+                    request -> endpoint.taskFor(request.input())
+            );
+        };
     }
 
     public static AgentHttpEndpoint sync(

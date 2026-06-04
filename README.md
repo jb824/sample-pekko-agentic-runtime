@@ -18,7 +18,72 @@ Current tools:
 
 ## Simplified Programmatic API
 
-Use the runtime facade to execute a client-defined agent system without wiring Pekko actors in app code:
+Use the runtime client facade to execute a client-defined agent workflow without wiring Pekko actors in app code:
+
+```java
+import com.example.agent.api.Agent;
+import com.example.agent.api.AgentMemoryConfig;
+import com.example.agent.api.AgentRunContext;
+import com.example.agent.api.AgentRuntimeClient;
+import com.example.agent.api.AgentSystem;
+import com.example.agent.api.AgentToolDefinition;
+import com.example.agent.api.AgentToolResult;
+import com.example.agent.api.AgentWorkflow;
+import com.example.agent.api.GatewayAgent;
+import com.example.agent.api.Task;
+
+import java.util.concurrent.CompletableFuture;
+
+public final class AssistantWorkflow implements AgentWorkflow {
+    private final AgentSystem system;
+
+    public AssistantWorkflow() {
+        Agent assistant = Agent.named("assistant")
+                .instructedBy("Answer directly and use available tools when useful.")
+                .uses("time.now")
+                .memory(AgentMemoryConfig.recentEvents(20))
+                .build();
+
+        GatewayAgent gateway = GatewayAgent.named("assistant-gateway")
+                .accepts(Task.of("agent.request").maxIterations(1).build())
+                .delegatesTo(assistant)
+                .build();
+
+        this.system = AgentSystem.builder().entrypoint(gateway).agent(assistant).build();
+    }
+
+    public AgentSystem system() {
+        return system;
+    }
+
+    public String taskType() {
+        return "agent.request";
+    }
+
+    public java.time.Duration timeout() {
+        return java.time.Duration.ofSeconds(60);
+    }
+}
+
+AgentToolDefinition timeNow = AgentToolDefinition.named("time.now")
+        .describedAs("Returns the current UTC time.")
+        .handledBy(request -> CompletableFuture.completedFuture(
+                AgentToolResult.success(java.time.Instant.now().toString())
+        ))
+        .build();
+
+try (AgentRuntimeClient client = AgentRuntimeClient.builder().tool(timeNow).build()) {
+    var result = client.run(
+            AgentRunContext.tenant("default"),
+            new AssistantWorkflow(),
+            "What time is it?"
+    ).toCompletableFuture().join();
+
+    System.out.println(result.output());
+}
+```
+
+For lower-level control, build the `AgentSystem` and `AgentTask` directly:
 
 ```java
 import com.example.agent.api.Agent;
@@ -56,7 +121,8 @@ try (AgentRuntime runtime = AgentRuntime.builder().build()) {
 ```
 
 Design intent:
-- client code defines the agent system and task contract
+- client code defines agents, task contracts, workflows, and endpoints
+- client code defines and registers tool implementations
 - transport/runtime internals stay hidden behind `AgentRuntime`
 - tool selection remains explicit and decoupled from orchestration code
 - the built-in `DefaultAgentSystemExecutorActor` is runtime infrastructure for executing client-defined agent systems, not a workflow catalog
@@ -168,6 +234,64 @@ Security/ops notes:
 - Runtime logs do not log raw document chunks, embeddings, API keys, or full prompts.
 - Retrieval failures degrade gracefully by omitting RAG context and continuing the agent run.
 - Telemetry spans are emitted for retrieval and indexing latency, chunk counts, score range, and failures.
+
+## Durable Agent Context
+
+The production recovery model separates durable workflow correctness from large context payloads and inference cache optimization:
+
+- Pekko Persistence Cassandra stores workflow/entity events and snapshots only.
+- Cassandra application tables under `agent_context` store context manifests and memory chunk metadata/content.
+- Object storage or a document store should hold large raw transcripts/context artifacts.
+- Vector DB/search stores embeddings and retrieval indexes.
+- KV/prompt cache is optional; checkpoints must recover without it.
+
+Durable checkpoint shape:
+
+```text
+tenantId
+workflowId
+conversationId
+agentId
+current workflow step
+plan
+task/tool result refs
+summary/context manifest refs
+last processed event id
+retry and budget state
+human approval state
+last event seq nr
+```
+
+Recovery flow:
+
+```text
+WorkflowEntity starts or moves
+  -> Pekko Persistence replays/snapshots checkpoint state
+  -> runtime loads context manifest
+  -> runtime loads recent chunks / summary refs
+  -> optional inference cache lookup
+  -> prompt rebuild if cache misses
+```
+
+The Cassandra app schema lives in `runtime/src/main/resources/db/cassandra`. It is intentionally separate from Pekko journal/snapshot keyspaces. The runtime currently uses Pekko Persistence Cassandra for actor recovery; application-table CQL is applied manually until a migration tool is chosen.
+
+Apply the app schema with `cqlsh` if available:
+
+```bash
+cqlsh 127.0.0.1 9042 -f runtime/src/main/resources/db/cassandra/001_agent_context.cql
+```
+
+If Cassandra is running in Docker and `cqlsh` is only available inside the container:
+
+```bash
+docker exec -i cassandra-dev cqlsh < runtime/src/main/resources/db/cassandra/001_agent_context.cql
+```
+
+Run the opt-in Pekko Persistence Cassandra recovery test when Cassandra is available:
+
+```bash
+CASSANDRA_INTEGRATION=true ./gradlew --no-configuration-cache :runtime:test --tests com.example.agent.runtime.checkpoint.WorkflowEntityCassandraIntegrationTest
+```
 
 ## Easy HTTP Bootstrap
 
@@ -353,7 +477,7 @@ Use in agent runtime:
 AGENT_TOOLS=rag.retrieve,time.now \
 RAG_RETRIEVAL_URL=http://localhost:8090 \
 AGENT_TENANT_ID=default \
-./gradlew :example:run
+./gradlew :client:run
 ```
 
 Test-only local corpus auto-ingest on app startup (`./gradlew :example:run`):
@@ -438,8 +562,15 @@ Example:
 LLM_BACKEND=ollama \
 AGENT_TOOLS=time.now \
 AGENT_PROMPT="What time is it now in UTC?" \
-./gradlew :example:run
+./gradlew --no-configuration-cache :example:run
 ```
+
+```bash
+  LLM_BACKEND=ollama \
+  AGENT_TOOLS=time.now \
+  AGENT_PROMPT="Which month of the year has the letter 'X' in it?" \
+  ./gradlew --no-configuration-cache :client:run
+  ```
 
 ## Set Up vLLM
 

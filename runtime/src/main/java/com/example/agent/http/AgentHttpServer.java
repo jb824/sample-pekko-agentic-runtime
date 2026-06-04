@@ -1,6 +1,7 @@
 package com.example.agent.http;
 
 import com.example.agent.api.AgentRuntime;
+import com.example.agent.api.AgentEndpoint;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.pekko.actor.typed.ActorSystem;
 import org.apache.pekko.actor.typed.javadsl.Behaviors;
@@ -248,6 +249,18 @@ public final class AgentHttpServer extends AllDirectives implements AutoCloseabl
         public Builder endpoint(AgentHttpEndpoint endpoint) {
             this.endpoints.add(Objects.requireNonNull(endpoint));
             return this;
+        }
+
+        public Builder endpoint(AgentEndpoint endpoint) {
+            return endpoint(AgentHttpEndpoint.from(endpoint));
+        }
+
+        public Builder syncEndpoint(String path, com.example.agent.api.AgentWorkflow workflow) {
+            return endpoint(AgentEndpoint.sync(path, workflow));
+        }
+
+        public Builder asyncEndpoint(String path, com.example.agent.api.AgentWorkflow workflow) {
+            return endpoint(AgentEndpoint.async(path, workflow));
         }
 
         public Builder syncEndpoint(String path, com.example.agent.api.AgentSystem system, String taskType) {

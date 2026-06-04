@@ -7,7 +7,7 @@ import com.example.agent.runtime.agent.DefaultAgentSystemExecutorActor;
 import com.example.agent.runtime.agent.AgentSystemDefinition;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.rag.runtime.RagProtocol;
-import com.example.agent.tool.ToolProtocol;
+import com.example.agent.runtime.tool.ToolProtocol;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.AbstractBehavior;

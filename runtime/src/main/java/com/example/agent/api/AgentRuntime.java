@@ -17,7 +17,7 @@ import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.runtime.memory.InMemoryAgentMemoryStore;
 import com.example.agent.runtime.task.AgentTaskRegistryActor;
 import com.example.agent.runtime.telemetry.TelemetryBootstrap;
-import com.example.agent.tool.ToolRegistryActor;
+import com.example.agent.runtime.tool.ToolRegistryActor;
 import dev.langchain4j.model.chat.ChatModel;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.ActorSystem;
@@ -25,6 +25,9 @@ import org.apache.pekko.actor.typed.Props;
 import org.apache.pekko.actor.typed.javadsl.Behaviors;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -87,6 +90,7 @@ public final class AgentRuntime implements AutoCloseable {
         private ChatModel chatModel;
         private AgentMemoryStore memoryStore = new InMemoryAgentMemoryStore();
         private RagRuntimeComponents ragRuntimeComponents;
+        private final List<AgentToolDefinition> tools = new ArrayList<>();
         private Boolean ragEnabledOverride;
         private boolean telemetryEnabled = true;
 
@@ -102,6 +106,25 @@ public final class AgentRuntime implements AutoCloseable {
 
         public Builder memoryStore(AgentMemoryStore memoryStore) {
             this.memoryStore = Objects.requireNonNull(memoryStore);
+            return this;
+        }
+
+        public Builder tool(AgentToolDefinition tool) {
+            this.tools.add(Objects.requireNonNull(tool));
+            return this;
+        }
+
+        public Builder tools(AgentToolDefinition... tools) {
+            if (tools != null) {
+                this.tools.addAll(Arrays.asList(tools));
+            }
+            return this;
+        }
+
+        public Builder tools(List<AgentToolDefinition> tools) {
+            if (tools != null) {
+                this.tools.addAll(tools);
+            }
             return this;
         }
 
@@ -128,6 +151,7 @@ public final class AgentRuntime implements AutoCloseable {
             ChatModel resolvedModel = chatModel == null ? ChatModelFactory.create(config) : chatModel;
             RagRuntimeComponents resolvedRag = ragRuntimeComponents == null ? RagRuntimeFactory.create(config) : ragRuntimeComponents;
             boolean ragEnabled = ragEnabledOverride == null ? config.ragEnabled() : ragEnabledOverride;
+            List<AgentToolDefinition> resolvedTools = List.copyOf(tools);
 
             ActorSystem<GatewayActor.Command> system = ActorSystem.create(
                     Behaviors.setup(context -> {
@@ -135,7 +159,7 @@ public final class AgentRuntime implements AutoCloseable {
                                 LlmWorkerActor.create(resolvedModel, config.llmThreads(), config.llmQueueSize()),
                                 "llm-worker"
                         );
-                        var toolRegistry = context.spawn(ToolRegistryActor.create(config), "tool-registry");
+                        var toolRegistry = context.spawn(ToolRegistryActor.create(resolvedTools), "tool-registry");
                         var memoryRegistry = context.spawn(AgentMemoryRegistryActor.create(memoryStore), "agent-memory-registry");
                         var ragRuntime = context.spawn(
                                 RagRuntimeActor.create(resolvedRag.retriever(), resolvedRag.indexer()),

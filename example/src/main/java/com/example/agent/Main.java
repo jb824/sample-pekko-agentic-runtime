@@ -32,9 +32,8 @@ import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.runtime.memory.InMemoryAgentMemoryStore;
 import com.example.agent.runtime.task.AgentTaskRegistryActor;
 import com.example.agent.runtime.telemetry.TelemetryBootstrap;
-import com.example.agent.tool.ToolProtocol;
-import com.example.agent.tool.ToolCatalog;
-import com.example.agent.tool.ToolRegistryActor;
+import com.example.agent.runtime.tool.ToolProtocol;
+import com.example.agent.runtime.tool.ToolRegistryActor;
 import dev.langchain4j.model.chat.ChatModel;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.ActorSystem;
@@ -43,6 +42,7 @@ import org.apache.pekko.actor.typed.javadsl.Behaviors;
 import org.apache.pekko.http.javadsl.ServerBinding;
 
 import java.util.HashMap;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -71,7 +71,7 @@ public final class Main {
                     "llm-worker"
             );
             ActorRef<ToolProtocol.Command> toolRegistry = context.spawn(
-                    ToolRegistryActor.create(config),
+                    ToolRegistryActor.create(List.of()),
                     "tool-registry"
             );
             ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry = context.spawn(
@@ -311,7 +311,7 @@ public final class Main {
     }
 
     private static AgentSystem defaultApiAgentSystem(AppConfig config) {
-        String[] tools = ToolCatalog.parseEnabledTools(config.enabledTools()).toArray(String[]::new);
+        String[] tools = parseEnabledTools(config.enabledTools()).toArray(String[]::new);
         Agent assistant = Agent.named("assistant")
                 .instructedBy("Answer the user request directly, use tools when available, and return a concise factual result.")
                 .uses(tools)
@@ -327,6 +327,20 @@ public final class Main {
                 .build();
         return system;
     }
+
+    private static List<String> parseEnabledTools(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(value.split(","))
+                .map(String::trim)
+                .map(toolName -> toolName.toLowerCase().replace("\"", "").replace("[", "").replace("]", ""))
+                .filter(toolName -> !toolName.isBlank())
+                .filter(toolName -> !"none".equals(toolName))
+                .filter(toolName -> !"null".equals(toolName))
+                .toList();
+    }
+
     private static void printResponse(AgentRequest request, AgentResult response) {
         String input = request == null ? "<unknown request>" : request.input();
         System.out.println("Request " + response.requestId() + ": " + input);
