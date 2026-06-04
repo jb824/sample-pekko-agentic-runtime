@@ -20,7 +20,6 @@ import java.util.stream.Stream;
 
 public final class LocalCorpusAutoIngestor {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Tika TIKA = new Tika();
     private static final List<String> SUPPORTED = List.of(".md", ".txt", ".pdf", ".doc", ".docx");
 
     private LocalCorpusAutoIngestor() {
@@ -91,7 +90,7 @@ public final class LocalCorpusAutoIngestor {
         if (name.endsWith(".md") || name.endsWith(".txt")) {
             return Files.readString(file, StandardCharsets.UTF_8);
         }
-        return TIKA.parseToString(file);
+        return new Tika().parseToString(file);
     }
 
     private static void ingest(HttpClient client, AppConfig config, ProfileDocument document) throws Exception {

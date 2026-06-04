@@ -3,6 +3,7 @@ package com.example.agent.api;
 import com.example.agent.runtime.agent.AgentDefinition;
 import com.example.agent.runtime.agent.AgentSystemDefinition;
 import com.example.agent.runtime.agent.GatewayAgentDefinition;
+import com.example.agent.runtime.agent.MemoryDefinition;
 import com.example.agent.runtime.agent.TaskDefinition;
 
 final class AgentSystemMapper {
@@ -15,14 +16,28 @@ final class AgentSystemMapper {
                 gateway.name(),
                 gateway.instructions(),
                 gateway.tools(),
+                memory(gateway.memory()),
                 new TaskDefinition(gateway.acceptedTask().type(), gateway.acceptedTask().maxIterations()),
                 gateway.delegates()
         );
         return new AgentSystemDefinition(
                 entrypoint,
                 system.agents().stream()
-                        .map(agent -> new AgentDefinition(agent.name(), agent.instructions(), agent.tools()))
+                        .map(agent -> new AgentDefinition(agent.name(), agent.instructions(), agent.tools(), memory(agent.memory())))
                         .toList()
+        );
+    }
+
+    private static MemoryDefinition memory(AgentMemoryConfig config) {
+        AgentMemoryConfig memory = config == null ? AgentMemoryConfig.defaultEnabled() : config;
+        return new MemoryDefinition(
+                memory.enabled(),
+                memory.maxEvents(),
+                memory.rememberUserTasks(),
+                memory.rememberToolObservations(),
+                memory.rememberAgentOutputs(),
+                memory.rememberFinalAnswers(),
+                memory.rememberFailures()
         );
     }
 }

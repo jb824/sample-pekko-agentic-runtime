@@ -1,6 +1,7 @@
 package com.example.agent.adapter.grpc;
 
-import com.example.agent.runtime.AgentRuntimeService;
+import com.example.agent.api.AgentRuntime;
+import com.example.agent.api.AgentSystem;
 import com.example.agent.runtime.grpc.AgentRuntimeHandlerFactory;
 import org.apache.pekko.actor.typed.ActorSystem;
 import org.apache.pekko.http.javadsl.Http;
@@ -16,9 +17,10 @@ public final class GrpcServerAdapter {
             ActorSystem<?> system,
             String host,
             int port,
-            AgentRuntimeService runtimeService
+            AgentRuntime runtime,
+            AgentSystem defaultSystem
     ) {
-        AgentRuntimePekkoGrpcService service = new AgentRuntimePekkoGrpcService(runtimeService);
+        AgentRuntimePekkoGrpcService service = new AgentRuntimePekkoGrpcService(runtime, defaultSystem);
         return Http.get(system).newServerAt(host, port)
                 .bind(AgentRuntimeHandlerFactory.createWithServerReflection(service, system));
     }

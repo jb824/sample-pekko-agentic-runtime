@@ -1,8 +1,8 @@
 package com.example.agent.adapter.grpc;
 
-import com.example.agent.protocol.AgentRequest;
+import com.example.agent.api.AgentSystem;
+import com.example.agent.api.AgentTask;
 import com.example.agent.runtime.AgentResult;
-import com.example.agent.runtime.AgentRuntimeService;
 import com.example.agent.runtime.grpc.AgentRuntime;
 import com.example.agent.runtime.grpc.Error;
 import com.example.agent.runtime.grpc.HealthRequest;
@@ -16,17 +16,24 @@ import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 
 public final class AgentRuntimePekkoGrpcService implements AgentRuntime {
-    private final AgentRuntimeService runtimeService;
+    private final com.example.agent.api.AgentRuntime runtime;
+    private final AgentSystem defaultSystem;
 
-    public AgentRuntimePekkoGrpcService(AgentRuntimeService runtimeService) {
-        this.runtimeService = runtimeService;
+    public AgentRuntimePekkoGrpcService(com.example.agent.api.AgentRuntime runtime, AgentSystem defaultSystem) {
+        this.runtime = runtime;
+        this.defaultSystem = defaultSystem;
     }
 
     @Override
     public CompletionStage<InvokeResponse> invoke(InvokeRequest request) {
         Span span = Telemetry.startServerSpan("grpc.invoke");
         Duration timeout = request.getTimeoutMs() > 0 ? Duration.ofMillis(request.getTimeoutMs()) : Duration.ofSeconds(60);
-        return runtimeService.invoke(new AgentRequest(request.getRequestId(), request.getInput()), timeout)
+        return runtime.run(
+                        request.getRequestId(),
+                        defaultSystem,
+                        AgentTask.of(defaultSystem.entrypoint().acceptedTask().type()).instructions(request.getInput()).build(),
+                        timeout
+                )
                 .thenApply(AgentRuntimePekkoGrpcService::toProto)
                 .whenComplete((ignored, failure) -> {
                     if (failure != null) {

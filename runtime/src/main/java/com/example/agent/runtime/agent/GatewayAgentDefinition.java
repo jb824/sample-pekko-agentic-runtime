@@ -6,6 +6,7 @@ public record GatewayAgentDefinition(
         String name,
         String instructions,
         List<String> tools,
+        MemoryDefinition memory,
         TaskDefinition acceptedTask,
         List<String> delegates
 ) {

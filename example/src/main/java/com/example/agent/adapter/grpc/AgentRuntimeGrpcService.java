@@ -1,8 +1,9 @@
 package com.example.agent.adapter.grpc;
 
-import com.example.agent.protocol.AgentRequest;
+import com.example.agent.api.AgentRuntime;
+import com.example.agent.api.AgentSystem;
+import com.example.agent.api.AgentTask;
 import com.example.agent.runtime.AgentResult;
-import com.example.agent.runtime.AgentRuntimeService;
 import com.example.agent.runtime.grpc.AgentRuntimeGrpc;
 import com.example.agent.runtime.grpc.Error;
 import com.example.agent.runtime.grpc.HealthRequest;
@@ -17,17 +18,24 @@ import io.opentelemetry.api.trace.Span;
 import java.time.Duration;
 
 public final class AgentRuntimeGrpcService extends AgentRuntimeGrpc.AgentRuntimeImplBase {
-    private final AgentRuntimeService runtimeService;
+    private final AgentRuntime runtime;
+    private final AgentSystem defaultSystem;
 
-    public AgentRuntimeGrpcService(AgentRuntimeService runtimeService) {
-        this.runtimeService = runtimeService;
+    public AgentRuntimeGrpcService(AgentRuntime runtime, AgentSystem defaultSystem) {
+        this.runtime = runtime;
+        this.defaultSystem = defaultSystem;
     }
 
     @Override
     public void invoke(InvokeRequest request, StreamObserver<InvokeResponse> responseObserver) {
         Span span = Telemetry.startServerSpan("grpc.invoke");
         Duration timeout = request.getTimeoutMs() > 0 ? Duration.ofMillis(request.getTimeoutMs()) : Duration.ofSeconds(60);
-        runtimeService.invoke(new AgentRequest(request.getRequestId(), request.getInput()), timeout)
+        runtime.run(
+                        request.getRequestId(),
+                        defaultSystem,
+                        AgentTask.of(defaultSystem.entrypoint().acceptedTask().type()).instructions(request.getInput()).build(),
+                        timeout
+                )
                 .whenComplete((result, failure) -> {
                     if (failure != null) {
                         span.recordException(failure);

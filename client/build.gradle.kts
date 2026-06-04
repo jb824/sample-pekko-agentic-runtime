@@ -1,5 +1,6 @@
 plugins {
     `java-library`
+    application
 }
 
 repositories {
@@ -7,7 +8,7 @@ repositories {
 }
 
 dependencies {
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.19.2")
+    api(project(":runtime"))
 
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
@@ -22,4 +23,8 @@ java {
 
 tasks.named<Test>("test") {
     useJUnitPlatform()
+}
+
+application {
+    mainClass = "com.example.agent.Main"
 }

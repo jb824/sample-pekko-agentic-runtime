@@ -1,151 +1,54 @@
 package com.example.agent.client;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.agent.api.AgentRuntime;
+import com.example.agent.api.AgentRunContext;
+import com.example.agent.runtime.AgentResult;
 
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
-public final class AgentClient {
-    private static final ObjectMapper JSON = new ObjectMapper();
+public final class AgentClient implements AutoCloseable {
+    private final AgentRuntime runtime;
 
-    private final HttpClient httpClient;
-    private final URI baseUri;
-    private final Duration defaultTimeout;
-
-    private AgentClient(HttpClient httpClient, URI baseUri, Duration defaultTimeout) {
-        this.httpClient = httpClient;
-        this.baseUri = baseUri;
-        this.defaultTimeout = defaultTimeout;
+    private AgentClient(AgentRuntime runtime) {
+        this.runtime = Objects.requireNonNull(runtime);
     }
 
-    public static Builder builder() {
-        return new Builder();
+    public static AgentClient create() {
+        return new AgentClient(AgentRuntime.builder().build());
     }
 
-    public CompletionStage<AgentRunResult> run(AgentSystem agentSystem, String input) {
-        return run(UUID.randomUUID().toString(), agentSystem, input, defaultTimeout);
+    public CompletionStage<AgentResult> run(AgentWorkflow workflow, String input) {
+        return run(UUID.randomUUID().toString(), workflow, input, workflow.timeout());
     }
 
-    public CompletionStage<AgentRunResult> run(String requestId, AgentSystem agentSystem, String input, Duration timeout) {
-        return invoke(new AgentRunPayload(requestId, input, timeout.toMillis(), agentSystem), timeout);
+    public CompletionStage<AgentResult> run(String requestId, AgentWorkflow workflow, String input, Duration timeout) {
+        return runtime.run(requestId, workflow.system(), workflow.task(input), timeout);
     }
 
-    CompletionStage<AgentTaskState> startTask(String taskId, AgentSystem agentSystem, String input, Duration timeout) {
-        return invokeTask(new AgentRunPayload(taskId, input, timeout.toMillis(), agentSystem), timeout);
+    public CompletionStage<AgentResult> run(AgentRunContext context, AgentWorkflow workflow, String input) {
+        return run(context, UUID.randomUUID().toString(), workflow, input, workflow.timeout());
     }
 
-    CompletionStage<AgentTaskState> getTask(String taskId) {
-        try {
-            HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/v1/agents/tasks/" + taskId))
-                    .timeout(defaultTimeout.plusSeconds(5))
-                    .GET()
-                    .build();
-            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                    .thenCompose(response -> {
-                        if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                            try {
-                                return CompletableFuture.completedFuture(JSON.readValue(response.body(), AgentTaskState.class));
-                            } catch (IOException exception) {
-                                return CompletableFuture.failedFuture(exception);
-                            }
-                        }
-                        return CompletableFuture.failedFuture(new IllegalStateException(
-                                "Task lookup failed with HTTP " + response.statusCode() + ": " + response.body()
-                        ));
-                    });
-        } catch (Exception exception) {
-            return CompletableFuture.failedFuture(exception);
-        }
+    public CompletionStage<AgentResult> run(AgentRunContext context, String requestId, AgentWorkflow workflow, String input, Duration timeout) {
+        return runtime.run(context, requestId, workflow.system(), workflow.task(input), timeout);
     }
 
-    private CompletionStage<AgentRunResult> invoke(AgentRunPayload payload, Duration timeout) {
-        try {
-            HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/v1/agents/execute"))
-                    .timeout(timeout.plusSeconds(5))
-                    .header("content-type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(payload)))
-                    .build();
-            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                    .thenCompose(response -> {
-                        if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                            try {
-                                return CompletableFuture.completedFuture(JSON.readValue(response.body(), AgentRunResult.class));
-                            } catch (IOException exception) {
-                                return CompletableFuture.failedFuture(exception);
-                            }
-                        }
-                        return CompletableFuture.failedFuture(new IllegalStateException(
-                                "Agent run failed with HTTP " + response.statusCode() + ": " + response.body()
-                        ));
-                    });
-        } catch (Exception exception) {
-            return CompletableFuture.failedFuture(exception);
-        }
+    public AgentRun start(AgentWorkflow workflow, String input) {
+        return start(UUID.randomUUID().toString(), workflow, input, workflow.timeout());
     }
 
-    private CompletionStage<AgentTaskState> invokeTask(AgentRunPayload payload, Duration timeout) {
-        try {
-            HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/v1/agents/tasks"))
-                    .timeout(timeout.plusSeconds(5))
-                    .header("content-type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(payload)))
-                    .build();
-            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                    .thenCompose(response -> {
-                        if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                            try {
-                                return CompletableFuture.completedFuture(JSON.readValue(response.body(), AgentTaskState.class));
-                            } catch (IOException exception) {
-                                return CompletableFuture.failedFuture(exception);
-                            }
-                        }
-                        return CompletableFuture.failedFuture(new IllegalStateException(
-                                "Agent task failed with HTTP " + response.statusCode() + ": " + response.body()
-                        ));
-                    });
-        } catch (Exception exception) {
-            return CompletableFuture.failedFuture(exception);
-        }
+    public AgentRun start(String instanceId, AgentWorkflow workflow, String input, Duration timeout) {
+        String taskId = runtime.componentClient()
+                .forGatewayAgent(workflow.system(), instanceId)
+                .runSingleTask(workflow.task(input), timeout);
+        return new AgentRun(runtime.componentClient(), taskId);
     }
 
-    public static final class Builder {
-        private HttpClient httpClient = HttpClient.newHttpClient();
-        private URI baseUri = URI.create("http://localhost:8080");
-        private Duration defaultTimeout = Duration.ofSeconds(60);
-
-        public Builder httpClient(HttpClient httpClient) {
-            this.httpClient = Objects.requireNonNull(httpClient);
-            return this;
-        }
-
-        public Builder baseUri(String baseUri) {
-            this.baseUri = URI.create(Objects.requireNonNull(baseUri));
-            return this;
-        }
-
-        public Builder baseUri(URI baseUri) {
-            this.baseUri = Objects.requireNonNull(baseUri);
-            return this;
-        }
-
-        public Builder defaultTimeout(Duration defaultTimeout) {
-            this.defaultTimeout = Objects.requireNonNull(defaultTimeout);
-            return this;
-        }
-
-        public AgentClient build() {
-            return new AgentClient(httpClient, baseUri, defaultTimeout);
-        }
-    }
-
-    private record AgentRunPayload(String requestId, String input, long timeoutMs, AgentSystem system) {
+    @Override
+    public void close() {
+        runtime.close();
     }
 }

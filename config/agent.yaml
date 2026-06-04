@@ -19,13 +19,11 @@ llm:
 runtime:
   llm_threads: 4
   llm_queue_size: 32
+  task_retention_seconds: 900
+  max_retained_tasks: 1000
   requests: 1
 workflow:
-  mode: react
   tools: time.now,arxiv.search
-  max_tools: 3
-  max_steps: 4
-  tool_retry_attempts: 2
 timeouts:
   llm_seconds: 90
   workflow_seconds: 180
@@ -34,3 +32,18 @@ prompts:
   default: Explain the formation of a tornado
   inline: ""
   file: ""
+rag:
+  enabled: false
+  tenant_id: default
+  collection: customer_profiles
+  embedding:
+    provider: in-memory
+    model: simple-hash
+    dimensions: 384
+  vector_store: in-memory
+  top_k: 5
+  min_score: 0.0
+  max_context_chars: 4000
+  chunk:
+    max_chars: 1200
+    overlap_chars: 120

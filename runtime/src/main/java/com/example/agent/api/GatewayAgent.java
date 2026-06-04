@@ -7,11 +7,13 @@ public record GatewayAgent(
         String name,
         String instructions,
         List<String> tools,
+        AgentMemoryConfig memory,
         Task acceptedTask,
         List<String> delegates
 ) {
     public GatewayAgent {
         tools = tools == null ? List.of() : List.copyOf(tools);
+        memory = memory == null ? AgentMemoryConfig.defaultEnabled() : memory;
         delegates = delegates == null ? List.of() : List.copyOf(delegates);
     }
 
@@ -23,6 +25,7 @@ public record GatewayAgent(
         private final String name;
         private String instructions = "";
         private List<String> tools = List.of();
+        private AgentMemoryConfig memory = AgentMemoryConfig.defaultEnabled();
         private Task acceptedTask = Task.of("java.lang.String").build();
         private List<String> delegates = List.of();
 
@@ -52,8 +55,13 @@ public record GatewayAgent(
             return this;
         }
 
+        public Builder memory(AgentMemoryConfig memory) {
+            this.memory = memory == null ? AgentMemoryConfig.defaultEnabled() : memory;
+            return this;
+        }
+
         public GatewayAgent build() {
-            return new GatewayAgent(name, instructions, tools, acceptedTask, delegates);
+            return new GatewayAgent(name, instructions, tools, memory, acceptedTask, delegates);
         }
     }
 }

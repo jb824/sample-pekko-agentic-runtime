@@ -9,6 +9,7 @@ import org.apache.pekko.actor.typed.javadsl.AskPattern;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 
 public final class GatewayAgentClient {
@@ -33,17 +34,26 @@ public final class GatewayAgentClient {
     }
 
     public String runSingleTask(AgentTask task) {
-        return runSingleTaskAsync(task).toCompletableFuture().join();
+        return runSingleTask(task, defaultTimeout);
+    }
+
+    public String runSingleTask(AgentTask task, Duration timeout) {
+        return runSingleTaskAsync(task, timeout).toCompletableFuture().join();
     }
 
     public CompletionStage<String> runSingleTaskAsync(AgentTask task) {
+        return runSingleTaskAsync(task, defaultTimeout);
+    }
+
+    public CompletionStage<String> runSingleTaskAsync(AgentTask task, Duration timeout) {
         AgentSystemDefinition runtimeSystem = AgentSystemMapper.toRuntime(system);
+        String taskId = instanceId + "-" + UUID.randomUUID();
         return AskPattern.<AgentTaskRegistryActor.Command, AgentTaskState>ask(
                 taskRegistry,
                 replyTo -> new AgentTaskRegistryActor.StartTask(
-                        instanceId,
+                        taskId,
                         task.instructions(),
-                        defaultTimeout,
+                        timeout,
                         runtimeSystem,
                         replyTo
                 ),

@@ -1,13 +1,7 @@
 # Pekko LLM Agent Runtime
 
-This project is a JVM runtime for LLM-backed agentic workflows using Apache Pekko Typed. Pekko owns orchestration, LLM 
-calls, and tools sit behind actor boundaries.  
-
-Current workflows:
-
-- `research`: single research-style LLM call
-- `planner-executor`: plan, optional tools, final execution
-- `react`: bounded ReAct loop with tool actions and final answer
+This project is a JVM runtime for LLM-backed agent systems using Apache Pekko Typed. Pekko owns orchestration, LLM
+calls, and tool boundaries; client/application code owns workflow composition, endpoints, and structured outputs.
 
 Current LLM backends:
 
@@ -24,41 +18,52 @@ Current tools:
 
 ## Simplified Programmatic API
 
-Use the new high-level runtime facade to avoid actor wiring in app code:
+Use the runtime facade to execute a client-defined agent system without wiring Pekko actors in app code:
 
 ```java
+import com.example.agent.api.Agent;
 import com.example.agent.api.AgentRuntime;
-import com.example.agent.workflow.WorkflowTemplate;
+import com.example.agent.api.AgentSystem;
+import com.example.agent.api.AgentTask;
+import com.example.agent.api.GatewayAgent;
+import com.example.agent.api.Task;
 
-try (AgentRuntime runtime = AgentRuntime.builder()
-        .workflow(WorkflowTemplate.react())
-        .build()) {
-    var result = runtime.run("Summarize the latest CDC flu guidance for clinicians.").toCompletableFuture().join();
+Agent researcher = Agent.named("researcher")
+        .instructedBy("Answer carefully and cite tool results when available.")
+        .uses("web.search", "arxiv.search")
+        .build();
+
+GatewayAgent gateway = GatewayAgent.named("gateway")
+        .accepts(Task.of("research.request").maxIterations(1).build())
+        .delegatesTo(researcher)
+        .instructedBy("Delegate to the researcher and return the final answer.")
+        .build();
+
+AgentSystem system = AgentSystem.builder()
+        .entrypoint(gateway)
+        .agent(researcher)
+        .build();
+
+try (AgentRuntime runtime = AgentRuntime.builder().build()) {
+    var result = runtime.run(
+            system,
+            AgentTask.of("research.request")
+                    .instructions("Summarize the latest CDC flu guidance for clinicians.")
+                    .build()
+    ).toCompletableFuture().join();
     System.out.println(result.output());
 }
 ```
 
-Create your own workflow template with clear boundaries (style + limits + tools):
-
-```java
-import com.example.agent.workflow.WorkflowStyle;
-import com.example.agent.workflow.WorkflowTemplate;
-
-WorkflowTemplate clinicalResearch = WorkflowTemplate.named("clinical-research", WorkflowStyle.PLAN_AND_EXECUTE)
-        .tools(java.util.List.of("web.search", "arxiv.search"))
-        .maxTools(2)
-        .maxToolRetries(1)
-        .build();
-```
-
 Design intent:
-- workflow behavior is declared as a template
+- client code defines the agent system and task contract
 - transport/runtime internals stay hidden behind `AgentRuntime`
-- tool selection is explicit and decoupled from orchestration code
+- tool selection remains explicit and decoupled from orchestration code
+- the built-in `DefaultAgentSystemExecutorActor` is runtime infrastructure for executing client-defined agent systems, not a workflow catalog
 
 ## Embedded Runtime API
 
-The `runtime` module is the library target (`com.example.agent:pekko-agent-runtime`). Application code embeds the runtime and owns HTTP/gRPC endpoint classes; `PekkoHttpAdapter` lives in `example` as an adapter sample.
+The `runtime` module is the library target (`com.example.agent:pekko-agent-runtime`). It contains agent execution, task lifecycle, tools, LLM orchestration, and the small Pekko HTTP bootstrap API under `com.example.agent.http`, so clients only need one runtime dependency.
 
 ```java
 import com.example.agent.api.Agent;
@@ -105,13 +110,113 @@ try (AgentRuntime runtime = AgentRuntime.builder().build()) {
 }
 ```
 
-Example adapter endpoints in this repository:
-- `POST /v1/agent/invoke` (default workflow)
+Example HTTP endpoints in this repository:
 - `POST /v1/agents/execute` (client-designed multi-agent system)
-- `POST /v1/workflows/execute` (client-designed workflow per request)
-- `POST /v1/workflows/research/invoke`
-- `POST /v1/workflows/planner-executor/invoke`
-- `POST /v1/workflows/react/invoke`
+- `POST /v1/agents/tasks`
+- `GET /v1/agents/tasks/{taskId}`
+
+## Pluggable RAG Runtime
+
+RAG is an external knowledge subsystem, not Pekko Persistence storage. The runtime uses provider-neutral interfaces for:
+
+- `EmbeddingClient` — embeds query/document text and exposes model/dimensions
+- `VectorStore` — upserts chunks, deletes by tenant/document, and performs tenant-filtered similarity search
+- `RagRetriever` — retrieves scored chunks for a tenant/security context
+- `RagContextBuilder` — formats retrieved chunks into bounded prompt context with citations
+
+Query-time flow:
+
+```text
+Agent request
+  -> DefaultAgentSystemExecutorActor
+  -> RagRuntimeActor, if RAG_ENABLED=true
+  -> EmbeddingClient + VectorStore
+  -> Retrieved knowledge context
+  -> LLM prompt construction
+```
+
+Ingestion flow:
+
+```text
+RagRuntimeActor.IndexDocument / ReindexDocument / DeleteDocument
+  -> DocumentChunker
+  -> EmbeddingClient.embedBatch
+  -> VectorStore.upsert/delete
+```
+
+Current built-in provider is local `in-memory` with deterministic hash embeddings for tests and development. Production embedding should use an intfloat E5-family provider behind `EmbeddingClient` (for example ONNX/local E5 or an E5-compatible embedding service). pgvector, Qdrant, or other stores should be added behind `VectorStore`. If pgvector is added and shares a PostgreSQL instance with Pekko Persistence R2DBC, it must use separate schemas/tables/migrations and must not modify Pekko journal, snapshot, or projection tables.
+
+RAG config/env:
+
+```text
+RAG_ENABLED=false
+RAG_EMBEDDING_PROVIDER=in-memory
+RAG_EMBEDDING_MODEL=intfloat/multilingual-e5-large-instruct
+RAG_EMBEDDING_DIMENSIONS=384
+RAG_VECTOR_STORE=in-memory
+RAG_TOP_K=5
+RAG_MIN_SCORE=0.0
+RAG_MAX_CONTEXT_CHARS=4000
+RAG_CHUNK_MAX_CHARS=1200
+RAG_CHUNK_OVERLAP_CHARS=120
+PGVECTOR_*=<only for future pgvector provider>
+```
+
+Security/ops notes:
+
+- Retrieval is always called with tenant context; the default vector store never searches across tenants.
+- Runtime logs do not log raw document chunks, embeddings, API keys, or full prompts.
+- Retrieval failures degrade gracefully by omitting RAG context and continuing the agent run.
+- Telemetry spans are emitted for retrieval and indexing latency, chunk counts, score range, and failures.
+
+## Easy HTTP Bootstrap
+
+Use `com.example.agent.http.AgentHttpServer` when you want a small Pekko HTTP route-based server for client-defined agent endpoints:
+
+```java
+import com.example.agent.api.Agent;
+import com.example.agent.api.AgentRuntime;
+import com.example.agent.api.AgentSystem;
+import com.example.agent.api.GatewayAgent;
+import com.example.agent.api.Task;
+import com.example.agent.http.AgentHttpServer;
+
+Agent researcher = Agent.named("researcher")
+        .instructedBy("Answer carefully and use tools when appropriate.")
+        .uses("web.search", "arxiv.search")
+        .build();
+
+GatewayAgent gateway = GatewayAgent.named("gateway")
+        .accepts(Task.of("research.request").maxIterations(1).build())
+        .delegatesTo(researcher)
+        .instructedBy("Delegate to the researcher and return the final answer.")
+        .build();
+
+AgentSystem system = AgentSystem.builder()
+        .entrypoint(gateway)
+        .agent(researcher)
+        .build();
+
+try (AgentRuntime runtime = AgentRuntime.builder().build();
+     AgentHttpServer server = AgentHttpServer.builder()
+             .runtime(runtime)
+             .port(8080)
+             .syncEndpoint("/v1/research", system, "research.request")
+             .asyncEndpoint("/v1/research/tasks", system, "research.request")
+             .build()) {
+    server.start().toCompletableFuture().join();
+}
+```
+
+Request body format for sync/async endpoints:
+
+```json
+{
+  "requestId": "optional-id",
+  "input": "Summarize the latest CDC flu guidance for clinicians.",
+  "timeoutMs": 60000
+}
+```
 
 ## Requirements
 
@@ -179,7 +284,9 @@ AGENT_GRPC_PORT=8081 \
 HTTP endpoints:
 
 - `GET /health`
-- `POST /v1/agent/invoke` JSON body: `{"requestId":"...", "input":"...", "timeoutMs":60000}`
+- `POST /v1/agents/execute`
+- `POST /v1/agents/tasks`
+- `GET /v1/agents/tasks/{taskId}`
 
 ## Decoupled RAG Retrieval Service
 
@@ -307,9 +414,9 @@ Useful environment variables:
 LLM_BACKEND=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=granite4:3b
-AGENT_WORKFLOW=planner-executor
 AGENT_TOOLS=time.now
-AGENT_TOOL_RETRY_ATTEMPTS=2
+LLM_THREADS=4
+LLM_QUEUE_SIZE=32
 AGENT_PROMPT="Explain Apache Pekko typed actors in one practical paragraph."
 ```
 
@@ -329,7 +436,6 @@ Example:
 
 ```bash
 LLM_BACKEND=ollama \
-AGENT_WORKFLOW=react \
 AGENT_TOOLS=time.now \
 AGENT_PROMPT="What time is it now in UTC?" \
 ./gradlew :example:run
@@ -370,7 +476,6 @@ LLM_BACKEND=vllm \
 VLLM_BASE_URL=http://localhost:8000/v1 \
 VLLM_MODEL=ibm-granite/granite-4.1-3b \
 VLLM_API_TYPE=chat \
-AGENT_WORKFLOW=react \
 AGENT_TOOLS=web.search,arxiv.search \
 AGENT_PROMPT="What treatments are available for adenoid cystic carcinoma?" \
 ./gradlew :example:run
@@ -387,10 +492,7 @@ VLLM_BASE_URL=http://localhost:8000/v1 \
 VLLM_MODEL=ibm-granite/granite-4.1-3b \
 VLLM_API_TYPE=chat \
 VLLM_MAX_TOKENS=256 \
-AGENT_WORKFLOW=react \
 AGENT_TOOLS=web.search,arxiv.search \
-AGENT_MAX_TOOLS=2 \
-AGENT_MAX_STEPS=4 \
 AGENT_PROMPT="What treatments are available for adenoid cystic carcinoma?" \
 ./scripts/test-vllm-concurrency.sh
 ```
@@ -418,19 +520,16 @@ LLM_BACKEND=vllm-grpc \
 VLLM_GRPC_HOST=localhost \
 VLLM_GRPC_PORT=8000 \
 VLLM_TOKENIZER_PATH=~/.cache/huggingface/hub/models--ibm-granite--granite-4.1-3b/snapshots/ \
-AGENT_WORKFLOW=react \
 AGENT_TOOLS=web.search \
 ./scripts/test-vllm-concurrency.sh
 ```
 
 ## Notes
 
-The ReAct workflow is bounded by:
+The runtime’s LLM/tool execution is bounded by:
 
-- `AGENT_MAX_STEPS`
-- `AGENT_MAX_TOOLS`
+- `LLM_THREADS`
+- `LLM_QUEUE_SIZE`
 - `TOOL_TIMEOUT_SECONDS`
 - `WORKFLOW_TIMEOUT_SECONDS`
 - `VLLM_MAX_TOKENS`
-
-For biomedical or research-like prompts, ReAct requires source URLs from enabled source tools before returning a final answer.
