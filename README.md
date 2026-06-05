@@ -190,6 +190,21 @@ Example HTTP endpoints in this repository:
 - `POST /v1/agents/tasks`
 - `GET /v1/agents/tasks/{taskId}`
 
+## Post-Execution Consumers
+
+Clients can register runtime consumers for non-blocking post-execution work such as evaluation agents, audit trails, metrics, or guardrails. The runtime only provides delivery infrastructure; each client owns its consumer logic and idempotency.
+
+```java
+try (AgentRuntime runtime = AgentRuntime.builder()
+        .consumer(new EvaluationConsumer((input, output) ->
+                new EvaluationConsumer.EvaluationResult(true, 1.0, "")))
+        .build()) {
+    runtime.run(system, AgentTask.of("agent.request").instructions("Hello").build());
+}
+```
+
+Consumer events are fire-and-forget after the `AgentResult` is sent to the caller. Delivery is at least once; use `consumerId + requestId` as the idempotency key. Configure the shared consumer executor with `CONSUMER_THREADS` / `runtime.consumer_threads`, bound each consumer worker queue with `CONSUMER_QUEUE_SIZE` / `runtime.consumer_queue_size`, and set the default processing deadline with `CONSUMER_PROCESSING_TIMEOUT_SECONDS` / `timeouts.consumer_processing_seconds`.
+
 ## Pluggable RAG Runtime
 
 RAG is an external knowledge subsystem, not Pekko Persistence storage. The runtime uses provider-neutral interfaces for:

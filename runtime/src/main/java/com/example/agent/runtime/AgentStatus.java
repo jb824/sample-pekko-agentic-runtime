@@ -6,5 +6,9 @@ public enum AgentStatus {
     TOOL_EXHAUSTED,
     TIMEOUT,
     POLICY_REJECTED,
-    FAILED_SYSTEM
+    FAILED_SYSTEM;
+
+    public boolean isSuccess() {
+        return this == COMPLETED || this == DEGRADED;
+    }
 }

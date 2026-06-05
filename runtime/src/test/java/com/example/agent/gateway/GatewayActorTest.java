@@ -80,6 +80,7 @@ final class GatewayActorTest {
                         toolRegistry,
                         memoryRegistry,
                         ragRuntime,
+                        null,
                         false,
                         1,
                         0,

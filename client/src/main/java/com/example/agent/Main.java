@@ -8,6 +8,7 @@ import com.example.agent.http.AgentHttpServer;
 import com.example.agent.runtime.AgentError;
 import com.example.agent.tools.SampleTools;
 
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 
 public final class Main {
@@ -24,21 +25,36 @@ public final class Main {
             runHttp(config, workflow);
             return;
         }
-        runCli(config, args, workflow);
+        AssistantResponseReviewConsumer reviewConsumer = reviewEnabled()
+                ? AssistantResponseReviewConsumer.fromConfig(config)
+                : null;
+        runCli(config, args, workflow, reviewConsumer);
     }
 
-    private static void runCli(AppConfig config, String[] args, AssistantWorkflow workflow) {
+    private static void runCli(
+            AppConfig config,
+            String[] args,
+            AssistantWorkflow workflow,
+            AssistantResponseReviewConsumer reviewConsumer
+    ) {
         String prompt = args.length == 0
                 ? System.getenv().getOrDefault("AGENT_PROMPT", "What time is it?")
                 : String.join(" ", args);
         AgentRunContext context = AgentRunContext.tenant(System.getenv().getOrDefault("AGENT_TENANT_ID", "default"));
 
-        try (AgentRuntimeClient client = AgentRuntimeClient.builder()
-                .config(config)
-                .build()) {
+        AgentRuntimeClient.Builder builder = AgentRuntimeClient.builder().config(config);
+        if (reviewConsumer != null) {
+            builder.consumer(reviewConsumer);
+        }
+
+        try (AgentRuntimeClient client = builder.build()) {
             var result = client.run(context, workflow, prompt).toCompletableFuture().join();
             if (result.isSuccess()) {
                 System.out.println(result.output());
+                if (reviewConsumer != null) {
+                    reviewConsumer.awaitReview(result.requestId(), reviewTimeout())
+                            .ifPresent(report -> System.out.println(report.format()));
+                }
                 return;
             }
             String errorText = result.errors().isEmpty()
@@ -51,9 +67,11 @@ public final class Main {
 
     private static void runHttp(AppConfig config, AssistantWorkflow workflow) {
         int port = Integer.parseInt(System.getenv().getOrDefault("AGENT_HTTP_PORT", "8080"));
-        AgentRuntime runtime = AgentRuntime.builder()
-                .config(config)
-                .build();
+        AgentRuntime.Builder runtimeBuilder = AgentRuntime.builder().config(config);
+        if (reviewEnabled()) {
+            runtimeBuilder.consumer(AssistantResponseReviewConsumer.fromConfig(config));
+        }
+        AgentRuntime runtime = runtimeBuilder.build();
         AgentHttpServer server = AgentHttpServer.builder()
                 .runtime(runtime)
                 .port(port)
@@ -70,5 +88,13 @@ public final class Main {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static boolean reviewEnabled() {
+        return Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_REVIEW_ENABLED", "false"));
+    }
+
+    private static Duration reviewTimeout() {
+        return Duration.ofSeconds(Long.parseLong(System.getenv().getOrDefault("AGENT_REVIEW_TIMEOUT_SECONDS", "60")));
     }
 }

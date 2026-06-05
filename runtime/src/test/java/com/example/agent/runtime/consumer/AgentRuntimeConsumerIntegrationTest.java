@@ -1,0 +1,128 @@
+package com.example.agent.runtime.consumer;
+
+import com.example.agent.api.Agent;
+import com.example.agent.api.AgentMemoryConfig;
+import com.example.agent.api.AgentRunContext;
+import com.example.agent.api.AgentRuntime;
+import com.example.agent.api.AgentSystem;
+import com.example.agent.api.AgentTaskRequest;
+import com.example.agent.api.GatewayAgent;
+import com.example.agent.api.Task;
+import dev.langchain4j.model.chat.ChatModel;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+final class AgentRuntimeConsumerIntegrationTest {
+    @Test
+    void registeredConsumerReceivesCompletedEventAfterRun() throws Exception {
+        CountDownLatch delivered = new CountDownLatch(1);
+        AtomicReference<AgentCompletedEvent> observed = new AtomicReference<>();
+        SpyConsumer consumer = new SpyConsumer(delivered, observed);
+
+        try (AgentRuntime runtime = AgentRuntime.builder()
+                .chatModel(new FixedModel())
+                .consumer(consumer)
+                .telemetryEnabled(false)
+                .build()) {
+            var result = runtime.run(
+                            AgentRunContext.tenant("tenant-a"),
+                            "request-1",
+                            system(),
+                            AgentTaskRequest.of("agent.request").instructions("hello").build(),
+                            Duration.ofSeconds(5)
+                    )
+                    .toCompletableFuture()
+                    .join();
+
+            assertTrue(result.isSuccess());
+            assertTrue(delivered.await(2, TimeUnit.SECONDS));
+            assertEquals("request-1", observed.get().requestId());
+            assertEquals("tenant-a", observed.get().tenantId());
+            assertEquals("gateway", observed.get().gatewayName());
+            assertEquals("hello", observed.get().originalInput());
+            assertEquals(com.example.agent.runtime.AgentStatus.COMPLETED, observed.get().status());
+        }
+    }
+
+    @Test
+    void registeredConsumerReceivesValidationFailureEvent() throws Exception {
+        CountDownLatch delivered = new CountDownLatch(1);
+        AtomicReference<AgentCompletedEvent> observed = new AtomicReference<>();
+        SpyConsumer consumer = new SpyConsumer(delivered, observed);
+
+        try (AgentRuntime runtime = AgentRuntime.builder()
+                .chatModel(new FixedModel())
+                .consumer(consumer)
+                .telemetryEnabled(false)
+                .build()) {
+            var result = runtime.run(
+                            AgentRunContext.tenant("tenant-a"),
+                            "request-invalid",
+                            system(),
+                            AgentTaskRequest.of("unknown.task").instructions("bad").build(),
+                            Duration.ofSeconds(5)
+                    )
+                    .toCompletableFuture()
+                    .join();
+
+            assertEquals(com.example.agent.runtime.AgentStatus.FAILED_SYSTEM, result.status());
+            assertTrue(delivered.await(2, TimeUnit.SECONDS));
+            assertEquals("request-invalid", observed.get().requestId());
+            assertEquals("bad", observed.get().originalInput());
+            assertEquals(com.example.agent.runtime.AgentStatus.FAILED_SYSTEM, observed.get().status());
+        }
+    }
+
+    private static AgentSystem system() {
+        Agent assistant = Agent.named("assistant")
+                .instructedBy("Answer.")
+                .memory(AgentMemoryConfig.disabled())
+                .build();
+        GatewayAgent gateway = GatewayAgent.named("gateway")
+                .accepts(Task.of("agent.request").maxIterations(1).build())
+                .delegatesTo(assistant)
+                .memory(AgentMemoryConfig.disabled())
+                .build();
+        return AgentSystem.builder().entrypoint(gateway).agent(assistant).build();
+    }
+
+    private static final class FixedModel implements ChatModel {
+        private int calls;
+
+        @Override
+        public String chat(String prompt) {
+            calls++;
+            return calls == 1 ? "FINAL: assistant answer" : "gateway answer";
+        }
+    }
+
+    private static final class SpyConsumer extends AgentConsumer {
+        private final CountDownLatch delivered;
+        private final AtomicReference<AgentCompletedEvent> observed;
+
+        private SpyConsumer(CountDownLatch delivered, AtomicReference<AgentCompletedEvent> observed) {
+            this.delivered = delivered;
+            this.observed = observed;
+        }
+
+        @Override
+        public String consumerId() {
+            return "spy-consumer";
+        }
+
+        @Override
+        public ConsumerEffect onAgentCompleted(AgentCompletedEvent event) {
+            observed.set(event);
+            delivered.countDown();
+            return ConsumerEffect.done();
+        }
+    }
+}

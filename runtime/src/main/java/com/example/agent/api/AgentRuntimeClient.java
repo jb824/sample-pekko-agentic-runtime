@@ -2,8 +2,11 @@ package com.example.agent.api;
 
 import com.example.agent.runtime.AgentResult;
 import com.example.agent.config.AppConfig;
+import com.example.agent.runtime.consumer.AgentConsumer;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -57,14 +60,22 @@ public final class AgentRuntimeClient implements AutoCloseable {
 
     public static final class Builder {
         private AppConfig config = AppConfig.fromEnvironment();
+        private final List<AgentConsumer> consumers = new ArrayList<>();
 
         public Builder config(AppConfig config) {
             this.config = Objects.requireNonNull(config);
             return this;
         }
 
+        public Builder consumer(AgentConsumer consumer) {
+            this.consumers.add(Objects.requireNonNull(consumer));
+            return this;
+        }
+
         public AgentRuntimeClient build() {
-            return new AgentRuntimeClient(AgentRuntime.builder().config(config).build());
+            AgentRuntime.Builder builder = AgentRuntime.builder().config(config);
+            consumers.forEach(builder::consumer);
+            return new AgentRuntimeClient(builder.build());
         }
     }
 }

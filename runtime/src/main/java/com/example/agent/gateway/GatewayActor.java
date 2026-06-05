@@ -7,6 +7,7 @@ import com.example.agent.runtime.AgentError;
 import com.example.agent.runtime.AgentResult;
 import com.example.agent.runtime.AgentStatus;
 import com.example.agent.runtime.agent.DefaultAgentSystemExecutorActor;
+import com.example.agent.runtime.consumer.AgentConsumerRegistryActor;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.rag.runtime.RagProtocol;
 import com.example.agent.runtime.tool.ToolProtocol;
@@ -25,6 +26,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
     private final ActorRef<ToolProtocol.Command> toolRegistry;
     private final ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry;
     private final ActorRef<RagProtocol.Command> ragRuntime;
+    private final ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry;
     private final boolean ragEnabled;
     private final int ragTopK;
     private final int ragMaxContextChars;
@@ -38,6 +40,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
             ActorRef<ToolProtocol.Command> toolRegistry,
             ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry,
             ActorRef<RagProtocol.Command> ragRuntime,
+            ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry,
             boolean ragEnabled,
             int ragTopK,
             int ragMaxContextChars,
@@ -51,6 +54,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
                 toolRegistry,
                 memoryRegistry,
                 ragRuntime,
+                consumerRegistry,
                 ragEnabled,
                 ragTopK,
                 ragMaxContextChars,
@@ -66,6 +70,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
             ActorRef<ToolProtocol.Command> toolRegistry,
             ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry,
             ActorRef<RagProtocol.Command> ragRuntime,
+            ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry,
             boolean ragEnabled,
             int ragTopK,
             int ragMaxContextChars,
@@ -78,6 +83,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
         this.toolRegistry = Objects.requireNonNull(toolRegistry);
         this.memoryRegistry = Objects.requireNonNull(memoryRegistry);
         this.ragRuntime = Objects.requireNonNull(ragRuntime);
+        this.consumerRegistry = consumerRegistry;
         this.ragEnabled = ragEnabled;
         this.ragTopK = Math.max(1, ragTopK);
         this.ragMaxContextChars = Math.max(0, ragMaxContextChars);
@@ -130,6 +136,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
                         toolRegistry,
                         memoryRegistry,
                         ragRuntime,
+                        consumerRegistry,
                         ragEnabled,
                         ragTopK,
                         ragMaxContextChars,

@@ -98,6 +98,7 @@ public final class Main {
                             toolRegistry,
                             memoryRegistry,
                             ragRuntime,
+                            null,
                             config.ragEnabled(),
                             config.ragTopK(),
                             config.ragMaxContextChars(),

@@ -12,6 +12,9 @@ import com.example.agent.rag.runtime.RagRuntimeComponents;
 import com.example.agent.rag.runtime.RagRuntimeFactory;
 import com.example.agent.runtime.ActorAgentRuntimeService;
 import com.example.agent.runtime.AgentResult;
+import com.example.agent.runtime.consumer.AgentConsumer;
+import com.example.agent.runtime.consumer.AgentCompletedEvent;
+import com.example.agent.runtime.consumer.AgentConsumerRegistryActor;
 import com.example.agent.runtime.memory.AgentMemoryStore;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.runtime.memory.InMemoryAgentMemoryStore;
@@ -25,6 +28,7 @@ import org.apache.pekko.actor.typed.Props;
 import org.apache.pekko.actor.typed.javadsl.Behaviors;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -35,17 +39,20 @@ import java.util.concurrent.CompletionStage;
 public final class AgentRuntime implements AutoCloseable {
     private final ActorSystem<GatewayActor.Command> actorSystem;
     private final ActorAgentRuntimeService runtimeService;
+    private final ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry;
     private final Duration defaultTimeout;
     private final AgentComponentClient componentClient;
 
     private AgentRuntime(
             ActorSystem<GatewayActor.Command> actorSystem,
             ActorAgentRuntimeService runtimeService,
+            ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry,
             Duration defaultTimeout,
             AgentComponentClient componentClient
     ) {
         this.actorSystem = actorSystem;
         this.runtimeService = runtimeService;
+        this.consumerRegistry = consumerRegistry;
         this.defaultTimeout = defaultTimeout;
         this.componentClient = componentClient;
     }
@@ -70,6 +77,14 @@ public final class AgentRuntime implements AutoCloseable {
         AgentRunContext resolvedContext = context == null ? AgentRunContext.defaults() : context;
         AgentResult validationFailure = validateTask(requestId, system, task);
         if (validationFailure != null) {
+            dispatchCompleted(
+                    requestId,
+                    resolvedContext.tenantId(),
+                    system,
+                    task,
+                    validationFailure,
+                    0L
+            );
             return java.util.concurrent.CompletableFuture.completedFuture(validationFailure);
         }
         return runtimeService.invoke(
@@ -117,6 +132,30 @@ public final class AgentRuntime implements AutoCloseable {
         return componentClient;
     }
 
+    private void dispatchCompleted(
+            String requestId,
+            String tenantId,
+            AgentSystem system,
+            AgentTaskRequest task,
+            AgentResult result,
+            long latencyMs
+    ) {
+        if (consumerRegistry == null) {
+            return;
+        }
+        consumerRegistry.tell(new AgentConsumerRegistryActor.Dispatch(new AgentCompletedEvent(
+                requestId,
+                tenantId,
+                system.entrypoint().name(),
+                task.instructions(),
+                result.output(),
+                result.status(),
+                result.sources(),
+                latencyMs,
+                Instant.now()
+        )));
+    }
+
     @Override
     public void close() {
         actorSystem.terminate();
@@ -129,6 +168,7 @@ public final class AgentRuntime implements AutoCloseable {
         private AgentMemoryStore memoryStore = new InMemoryAgentMemoryStore();
         private RagRuntimeComponents ragRuntimeComponents;
         private final List<AgentToolDefinition> tools = new ArrayList<>();
+        private final List<AgentConsumer> consumers = new ArrayList<>();
         private Boolean ragEnabledOverride;
         private boolean telemetryEnabled = true;
 
@@ -166,6 +206,11 @@ public final class AgentRuntime implements AutoCloseable {
             return this;
         }
 
+        public Builder consumer(AgentConsumer consumer) {
+            this.consumers.add(Objects.requireNonNull(consumer));
+            return this;
+        }
+
         public Builder ragRuntimeComponents(RagRuntimeComponents ragRuntimeComponents) {
             this.ragRuntimeComponents = Objects.requireNonNull(ragRuntimeComponents);
             return this;
@@ -190,6 +235,9 @@ public final class AgentRuntime implements AutoCloseable {
             RagRuntimeComponents resolvedRag = ragRuntimeComponents == null ? RagRuntimeFactory.create(config) : ragRuntimeComponents;
             boolean ragEnabled = ragEnabledOverride == null ? config.ragEnabled() : ragEnabledOverride;
             List<AgentToolDefinition> resolvedTools = List.copyOf(tools);
+            List<AgentConsumer> resolvedConsumers = List.copyOf(consumers);
+            java.util.concurrent.CompletableFuture<ActorRef<AgentConsumerRegistryActor.Command>> consumerRegistryRef =
+                    new java.util.concurrent.CompletableFuture<>();
 
             ActorSystem<GatewayActor.Command> system = ActorSystem.create(
                     Behaviors.setup(context -> {
@@ -206,12 +254,24 @@ public final class AgentRuntime implements AutoCloseable {
                                 RagRuntimeActor.create(resolvedRag.retriever(), resolvedRag.indexer()),
                                 "rag-runtime"
                         );
+                        ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry = resolvedConsumers.isEmpty()
+                                ? null
+                                : context.spawn(
+                                AgentConsumerRegistryActor.create(
+                                        resolvedConsumers,
+                                        config.consumerProcessingTimeout(),
+                                        config.consumerQueueSize()
+                                ),
+                                "agent-consumer-registry"
+                        );
+                        consumerRegistryRef.complete(consumerRegistry);
                         LocalCorpusAutoIngestor.maybeIngest(context.getLog(), config);
                         return GatewayActor.create(
                                 llmWorker,
                                 toolRegistry,
                                 memoryRegistry,
                                 ragRuntime,
+                                consumerRegistry,
                                 ragEnabled,
                                 config.ragTopK(),
                                 config.ragMaxContextChars(),
@@ -233,6 +293,7 @@ public final class AgentRuntime implements AutoCloseable {
             return new AgentRuntime(
                     system,
                     runtimeService,
+                    resolvedConsumers.isEmpty() ? null : consumerRegistryRef.join(),
                     config.workflowTimeout(),
                     new AgentComponentClient(taskRegistry, system.scheduler(), config.workflowTimeout())
             );

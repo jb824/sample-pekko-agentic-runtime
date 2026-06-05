@@ -21,6 +21,8 @@ runtime:
   llm_queue_size: 32
   tool_threads: 4
   tool_queue_size: 64
+  consumer_threads: 2
+  consumer_queue_size: 1024
   task_retention_seconds: 900
   max_retained_tasks: 1000
   max_concurrent_requests: 128
@@ -31,6 +33,7 @@ timeouts:
   llm_seconds: 90
   workflow_seconds: 180
   tool_seconds: 25
+  consumer_processing_seconds: 30
 prompts:
   default: Explain the formation of a tornado
   inline: ""

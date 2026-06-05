@@ -14,6 +14,8 @@ import com.example.agent.rag.runtime.RagProtocol;
 import com.example.agent.runtime.AgentError;
 import com.example.agent.runtime.AgentResult;
 import com.example.agent.runtime.AgentStatus;
+import com.example.agent.runtime.consumer.AgentCompletedEvent;
+import com.example.agent.runtime.consumer.AgentConsumerRegistryActor;
 import com.example.agent.runtime.memory.AgentMemoryEvent;
 import com.example.agent.runtime.memory.AgentMemoryEventType;
 import com.example.agent.runtime.memory.AgentMemoryKey;
@@ -27,6 +29,7 @@ import org.apache.pekko.actor.typed.javadsl.Behaviors;
 import org.apache.pekko.actor.typed.javadsl.Receive;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +42,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
     private final ActorRef<ToolProtocol.Command> toolRegistry;
     private final ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry;
     private final ActorRef<RagProtocol.Command> ragRuntime;
+    private final ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry;
     private final boolean ragEnabled;
     private final int ragTopK;
     private final RagContextBuilder ragContextBuilder;
@@ -50,6 +54,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
             ActorRef<ToolProtocol.Command> toolRegistry,
             ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry,
             ActorRef<RagProtocol.Command> ragRuntime,
+            ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry,
             boolean ragEnabled,
             int ragTopK,
             int ragMaxContextChars,
@@ -62,6 +67,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                 toolRegistry,
                 memoryRegistry,
                 ragRuntime,
+                consumerRegistry,
                 ragEnabled,
                 ragTopK,
                 ragMaxContextChars,
@@ -76,6 +82,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
             ActorRef<ToolProtocol.Command> toolRegistry,
             ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry,
             ActorRef<RagProtocol.Command> ragRuntime,
+            ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry,
             boolean ragEnabled,
             int ragTopK,
             int ragMaxContextChars,
@@ -87,6 +94,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
         this.toolRegistry = Objects.requireNonNull(toolRegistry);
         this.memoryRegistry = Objects.requireNonNull(memoryRegistry);
         this.ragRuntime = Objects.requireNonNull(ragRuntime);
+        this.consumerRegistry = consumerRegistry;
         this.ragEnabled = ragEnabled;
         this.ragTopK = Math.max(1, ragTopK);
         this.ragContextBuilder = new RagContextBuilder(ragMaxContextChars);
@@ -310,35 +318,58 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
             String err = wrapped.response().error() != null
                     ? wrapped.response().error().getMessage() : "gateway LLM failure";
             rememberGateway(state, AgentMemoryEventType.FAILURE, err);
-            state.replyTo().tell(new AgentResult(
+            AgentResult result = new AgentResult(
                     state.request().requestId(),
                     AgentStatus.FAILED_SYSTEM,
                     "",
                     state.distinctSources(),
-                    List.of(new AgentError("gateway_synthesis_failed", err, false, "gateway"))));
+                    List.of(new AgentError("gateway_synthesis_failed", err, false, "gateway")));
+            state.replyTo().tell(result);
+            dispatchCompleted(state, result);
             return Behaviors.stopped();
         }
 
         String answer = wrapped.response().text();
         rememberGateway(state, AgentMemoryEventType.USER_TASK, state.request().input());
         rememberGateway(state, AgentMemoryEventType.FINAL_ANSWER, answer);
-        state.replyTo().tell(new AgentResult(
+        AgentResult result = new AgentResult(
                 state.request().requestId(),
                 AgentStatus.COMPLETED,
                 withSources(state, answer),
                 state.distinctSources(),
-                List.of()));
+                List.of());
+        state.replyTo().tell(result);
+        dispatchCompleted(state, result);
         return Behaviors.stopped();
     }
 
     private Behavior<Command> onExecutionTimeout(ExecutionState state) {
-        state.replyTo().tell(new AgentResult(
+        AgentResult result = new AgentResult(
                 state.request().requestId(),
                 AgentStatus.TIMEOUT,
                 "",
                 state.distinctSources(),
-                List.of(new AgentError("executor_timeout", "Agent system execution timed out.", true, "executor"))));
+                List.of(new AgentError("executor_timeout", "Agent system execution timed out.", true, "executor")));
+        state.replyTo().tell(result);
+        dispatchCompleted(state, result);
         return Behaviors.stopped();
+    }
+
+    private void dispatchCompleted(ExecutionState state, AgentResult result) {
+        if (consumerRegistry == null) {
+            return;
+        }
+        consumerRegistry.tell(new AgentConsumerRegistryActor.Dispatch(new AgentCompletedEvent(
+                state.request().requestId(),
+                state.request().tenantId(),
+                state.system().entrypoint().name(),
+                state.request().input(),
+                result.output(),
+                result.status(),
+                result.sources(),
+                System.currentTimeMillis() - state.startedAtMs(),
+                Instant.now()
+        )));
     }
 
     private void rememberGateway(ExecutionState state, AgentMemoryEventType type, String content) {
@@ -395,6 +426,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
             AgentRequest request,
             AgentSystem system,
             ActorRef<AgentResult> replyTo,
+            long startedAtMs,
             List<Agent> delegates,
             int delegateIndex,
             String ragContext,
@@ -407,6 +439,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
             request = Objects.requireNonNull(request);
             system = Objects.requireNonNull(system);
             replyTo = Objects.requireNonNull(replyTo);
+            startedAtMs = Math.max(0L, startedAtMs);
             delegates = delegates == null ? List.of() : List.copyOf(delegates);
             delegateIndex = Math.max(0, delegateIndex);
             ragContext = ragContext == null || ragContext.isBlank() ? "None." : ragContext;
@@ -421,6 +454,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                     request,
                     system,
                     replyTo,
+                    System.currentTimeMillis(),
                     delegatesFor(system),
                     0,
                     "None.",
@@ -435,6 +469,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                     request,
                     system,
                     replyTo,
+                    startedAtMs,
                     delegates,
                     delegateIndex,
                     ragContext,
@@ -449,6 +484,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                     request,
                     system,
                     replyTo,
+                    startedAtMs,
                     delegates,
                     delegateIndex + 1,
                     ragContext,
@@ -465,6 +501,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                     request,
                     system,
                     replyTo,
+                    startedAtMs,
                     delegates,
                     delegateIndex,
                     ragContext,
@@ -479,6 +516,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                     request,
                     system,
                     replyTo,
+                    startedAtMs,
                     delegates,
                     delegateIndex,
                     ragContext,
