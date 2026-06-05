@@ -12,6 +12,5 @@ plugins {
 
 rootProject.name = "pekko-agent"
 include("runtime")
-include("runtime-checkpoint-cassandra")
 include("example")
 include("client")

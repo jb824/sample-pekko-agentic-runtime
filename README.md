@@ -138,7 +138,7 @@ Design intent:
 
 ## Embedded Runtime API
 
-The `runtime` module is the library target (`com.example.agent:pekko-agent-runtime`). It contains agent execution, task lifecycle, tools, LLM orchestration, and the small Pekko HTTP bootstrap API under `com.example.agent.http`, so clients only need one runtime dependency. Optional Pekko Persistence Cassandra checkpointing lives in `runtime-checkpoint-cassandra`.
+The `runtime` module is the library target (`com.example.agent:pekko-agent-runtime`). It contains agent execution, task lifecycle, tools, LLM orchestration, and the small Pekko HTTP bootstrap API under `com.example.agent.http`, so clients only need one runtime dependency.
 
 ```java
 import com.example.agent.api.Agent;
@@ -261,43 +261,9 @@ Security/ops notes:
 
 ## Durable Agent Context
 
-The production recovery model separates durable workflow correctness from large context payloads and inference cache optimization:
+Durable workflow checkpointing is intentionally out of the core runtime for now. The current runtime keeps execution embedded and simple; production persistence should be reintroduced only when the workflow/entity model is stable enough to justify a dedicated persistence module.
 
-- Pekko Persistence Cassandra can store workflow/entity events and snapshots through the optional `runtime-checkpoint-cassandra` module.
-- Cassandra application tables under `agent_context` store context manifests and memory chunk metadata/content.
-- Object storage or a document store should hold large raw transcripts/context artifacts.
-- Vector DB/search stores embeddings and retrieval indexes.
-- KV/prompt cache is optional; checkpoints must recover without it.
-
-Durable checkpoint shape:
-
-```text
-tenantId
-workflowId
-conversationId
-agentId
-current workflow step
-plan
-task/tool result refs
-summary/context manifest refs
-last processed event id
-retry and budget state
-human approval state
-last event seq nr
-```
-
-Recovery flow:
-
-```text
-WorkflowEntity starts or moves
-  -> Pekko Persistence replays/snapshots checkpoint state
-  -> runtime loads context manifest
-  -> runtime loads recent chunks / summary refs
-  -> optional inference cache lookup
-  -> prompt rebuild if cache misses
-```
-
-The Cassandra app schema lives in `runtime/src/main/resources/db/cassandra`. It is intentionally separate from Pekko journal/snapshot keyspaces. Core runtime does not require Cassandra; the optional checkpoint module carries Pekko Persistence Cassandra dependencies and configuration. Application-table CQL is applied manually until a migration tool is chosen.
+The Cassandra app schema lives in `runtime/src/main/resources/db/cassandra` for context manifests and memory chunk metadata/content. It is intentionally separate from any future Pekko journal/snapshot schema. Application-table CQL is applied manually until a migration tool is chosen.
 
 Apply the app schema with `cqlsh` if available:
 
@@ -309,12 +275,6 @@ If Cassandra is running in Docker and `cqlsh` is only available inside the conta
 
 ```bash
 docker exec -i cassandra-dev cqlsh < runtime/src/main/resources/db/cassandra/001_agent_context.cql
-```
-
-Run the opt-in Pekko Persistence Cassandra recovery test when Cassandra is available:
-
-```bash
-CASSANDRA_INTEGRATION=true ./gradlew --no-configuration-cache :runtime-checkpoint-cassandra:test --tests com.example.agent.runtime.checkpoint.WorkflowEntityCassandraIntegrationTest
 ```
 
 ## Easy HTTP Bootstrap
