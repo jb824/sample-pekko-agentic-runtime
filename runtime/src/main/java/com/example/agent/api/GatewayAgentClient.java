@@ -1,6 +1,5 @@
 package com.example.agent.api;
 
-import com.example.agent.runtime.agent.AgentSystemDefinition;
 import com.example.agent.runtime.task.AgentTaskState;
 import com.example.agent.runtime.task.AgentTaskRegistryActor;
 import org.apache.pekko.actor.typed.ActorRef;
@@ -33,20 +32,19 @@ public final class GatewayAgentClient {
         this.instanceId = Objects.requireNonNull(instanceId);
     }
 
-    public String runSingleTask(AgentTask task) {
+    public String runSingleTask(AgentTaskRequest task) {
         return runSingleTask(task, defaultTimeout);
     }
 
-    public String runSingleTask(AgentTask task, Duration timeout) {
+    public String runSingleTask(AgentTaskRequest task, Duration timeout) {
         return runSingleTaskAsync(task, timeout).toCompletableFuture().join();
     }
 
-    public CompletionStage<String> runSingleTaskAsync(AgentTask task) {
+    public CompletionStage<String> runSingleTaskAsync(AgentTaskRequest task) {
         return runSingleTaskAsync(task, defaultTimeout);
     }
 
-    public CompletionStage<String> runSingleTaskAsync(AgentTask task, Duration timeout) {
-        AgentSystemDefinition runtimeSystem = AgentSystemMapper.toRuntime(system);
+    public CompletionStage<String> runSingleTaskAsync(AgentTaskRequest task, Duration timeout) {
         String taskId = instanceId + "-" + UUID.randomUUID();
         return AskPattern.<AgentTaskRegistryActor.Command, AgentTaskState>ask(
                 taskRegistry,
@@ -54,7 +52,7 @@ public final class GatewayAgentClient {
                         taskId,
                         task.instructions(),
                         timeout,
-                        runtimeSystem,
+                        system,
                         replyTo
                 ),
                 Duration.ofSeconds(5),

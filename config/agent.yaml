@@ -19,8 +19,11 @@ llm:
 runtime:
   llm_threads: 4
   llm_queue_size: 32
+  tool_threads: 4
+  tool_queue_size: 64
   task_retention_seconds: 900
   max_retained_tasks: 1000
+  max_concurrent_requests: 128
   requests: 1
 workflow:
   tools: time.now,arxiv.search

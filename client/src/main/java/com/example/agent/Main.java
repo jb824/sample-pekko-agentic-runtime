@@ -16,7 +16,10 @@ public final class Main {
 
     public static void main(String[] args) {
         AppConfig config = AppConfig.fromEnvironment();
-        AssistantWorkflow workflow = new AssistantWorkflow(SampleTools.enabledToolNames(config).toArray(String[]::new));
+        AssistantWorkflow workflow = new AssistantWorkflow(
+                SampleTools.timeNow(java.time.Clock.systemUTC()),
+                SampleTools.webSearch()
+        );
         if (Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_HTTP", "false"))) {
             runHttp(config, workflow);
             return;
@@ -32,7 +35,6 @@ public final class Main {
 
         try (AgentRuntimeClient client = AgentRuntimeClient.builder()
                 .config(config)
-                .tools(SampleTools.definitionsFor(config))
                 .build()) {
             var result = client.run(context, workflow, prompt).toCompletableFuture().join();
             if (result.isSuccess()) {
@@ -51,7 +53,6 @@ public final class Main {
         int port = Integer.parseInt(System.getenv().getOrDefault("AGENT_HTTP_PORT", "8080"));
         AgentRuntime runtime = AgentRuntime.builder()
                 .config(config)
-                .tools(SampleTools.definitionsFor(config))
                 .build();
         AgentHttpServer server = AgentHttpServer.builder()
                 .runtime(runtime)

@@ -1,25 +1,21 @@
 package com.example.agent.api;
 
-public record AgentTask(String type, String instructions) {
-    public static Builder of(String type) {
-        return new Builder(type);
+import java.util.Map;
+
+@Deprecated(forRemoval = false)
+public final class AgentTask {
+    private AgentTask() {
     }
 
-    public static final class Builder {
-        private final String type;
-        private String instructions = "";
+    public static AgentTaskRequest.Builder of(String name) {
+        return AgentTaskRequest.of(name);
+    }
 
-        private Builder(String type) {
-            this.type = type;
-        }
+    public static AgentTaskRequest.Builder of(AgentTaskDefinition definition) {
+        return AgentTaskRequest.of(definition);
+    }
 
-        public Builder instructions(String instructions) {
-            this.instructions = instructions == null ? "" : instructions;
-            return this;
-        }
-
-        public AgentTask build() {
-            return new AgentTask(type, instructions);
-        }
+    public static AgentTaskRequest request(String name, String instructions) {
+        return new AgentTaskRequest(name, instructions, Map.of());
     }
 }

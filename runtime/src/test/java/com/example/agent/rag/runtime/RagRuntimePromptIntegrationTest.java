@@ -4,7 +4,7 @@ import com.example.agent.api.Agent;
 import com.example.agent.api.AgentRunContext;
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTask;
+import com.example.agent.api.AgentTaskRequest;
 import com.example.agent.api.GatewayAgent;
 import com.example.agent.api.Task;
 import com.example.agent.rag.core.IndexDocumentRequest;
@@ -127,8 +127,8 @@ final class RagRuntimePromptIntegrationTest {
         return AgentSystem.builder().entrypoint(gateway).agent(assistant).build();
     }
 
-    private static AgentTask task(String input) {
-        return AgentTask.of("agent.request").instructions(input).build();
+    private static AgentTaskRequest task(String input) {
+        return AgentTaskRequest.of("agent.request").instructions(input).build();
     }
 
     private static RetrievedChunk chunk(String tenantId, String documentId, String uri) {

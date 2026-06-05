@@ -1,9 +1,9 @@
 package com.example.agent.runtime.task;
 
+import com.example.agent.api.AgentSystem;
 import com.example.agent.protocol.AgentRequest;
 import com.example.agent.runtime.AgentRuntimeService;
 import com.example.agent.runtime.AgentResult;
-import com.example.agent.runtime.agent.AgentSystemDefinition;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.AbstractBehavior;
@@ -78,7 +78,7 @@ public final class AgentTaskRegistryActor extends AbstractBehavior<AgentTaskRegi
             String taskId,
             String input,
             Duration timeout,
-            AgentSystemDefinition system,
+            AgentSystem system,
             ActorRef<AgentTaskState> replyTo
     ) implements Command {
     }

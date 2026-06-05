@@ -54,25 +54,63 @@ public final class AgentRuntime implements AutoCloseable {
         return new Builder();
     }
 
-    public CompletionStage<AgentResult> run(AgentSystem system, AgentTask task) {
+    public CompletionStage<AgentResult> run(AgentSystem system, AgentTaskRequest task) {
         return run(AgentRunContext.defaults(), UUID.randomUUID().toString(), system, task, defaultTimeout);
     }
 
-    public CompletionStage<AgentResult> run(String requestId, AgentSystem system, AgentTask task, Duration timeout) {
+    public CompletionStage<AgentResult> run(String requestId, AgentSystem system, AgentTaskRequest task, Duration timeout) {
         return run(AgentRunContext.defaults(), requestId, system, task, timeout);
     }
 
-    public CompletionStage<AgentResult> run(AgentRunContext context, AgentSystem system, AgentTask task) {
+    public CompletionStage<AgentResult> run(AgentRunContext context, AgentSystem system, AgentTaskRequest task) {
         return run(context, UUID.randomUUID().toString(), system, task, defaultTimeout);
     }
 
-    public CompletionStage<AgentResult> run(AgentRunContext context, String requestId, AgentSystem system, AgentTask task, Duration timeout) {
+    public CompletionStage<AgentResult> run(AgentRunContext context, String requestId, AgentSystem system, AgentTaskRequest task, Duration timeout) {
         AgentRunContext resolvedContext = context == null ? AgentRunContext.defaults() : context;
+        AgentResult validationFailure = validateTask(requestId, system, task);
+        if (validationFailure != null) {
+            return java.util.concurrent.CompletableFuture.completedFuture(validationFailure);
+        }
         return runtimeService.invoke(
                 new AgentRequest(requestId, task.instructions(), resolvedContext.tenantId()),
-                AgentSystemMapper.toRuntime(system),
+                system,
                 timeout
         );
+    }
+
+    private static AgentResult validateTask(String requestId, AgentSystem system, AgentTaskRequest task) {
+        AgentTaskDefinition definition = system.taskDefinition(task.name());
+        if (definition == null) {
+            return new AgentResult(
+                    requestId,
+                    com.example.agent.runtime.AgentStatus.FAILED_SYSTEM,
+                    "",
+                    java.util.List.of(),
+                    java.util.List.of(new com.example.agent.runtime.AgentError(
+                            "unsupported_task",
+                            "Task is not accepted by this agent system: " + task.name(),
+                            false,
+                            "task"
+                    ))
+            );
+        }
+        AgentTaskRuleResult validation = definition.validate(task);
+        if (!validation.valid()) {
+            return new AgentResult(
+                    requestId,
+                    com.example.agent.runtime.AgentStatus.FAILED_SYSTEM,
+                    "",
+                    java.util.List.of(),
+                    java.util.List.of(new com.example.agent.runtime.AgentError(
+                            "invalid_task",
+                            validation.message(),
+                            false,
+                            "task"
+                    ))
+            );
+        }
+        return null;
     }
 
     public AgentComponentClient componentClient() {
@@ -159,7 +197,10 @@ public final class AgentRuntime implements AutoCloseable {
                                 LlmWorkerActor.create(resolvedModel, config.llmThreads(), config.llmQueueSize()),
                                 "llm-worker"
                         );
-                        var toolRegistry = context.spawn(ToolRegistryActor.create(resolvedTools), "tool-registry");
+                        var toolRegistry = context.spawn(
+                                ToolRegistryActor.create(resolvedTools, config.toolThreads(), config.toolQueueSize()),
+                                "tool-registry"
+                        );
                         var memoryRegistry = context.spawn(AgentMemoryRegistryActor.create(memoryStore), "agent-memory-registry");
                         var ragRuntime = context.spawn(
                                 RagRuntimeActor.create(resolvedRag.retriever(), resolvedRag.indexer()),
@@ -175,7 +216,8 @@ public final class AgentRuntime implements AutoCloseable {
                                 config.ragTopK(),
                                 config.ragMaxContextChars(),
                                 config.workflowTimeout(),
-                                config.toolTimeout()
+                                config.toolTimeout(),
+                                config.maxConcurrentRequests()
                         );
                     }),
                     "pekko-llm-agent-runtime",

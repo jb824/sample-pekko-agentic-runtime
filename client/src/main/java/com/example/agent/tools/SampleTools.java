@@ -27,7 +27,6 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -44,16 +43,6 @@ public final class SampleTools {
     private SampleTools() {
     }
 
-    public static List<String> enabledToolNames(AppConfig config) {
-        return parseEnabledTools(config.enabledTools());
-    }
-
-    public static List<AgentToolDefinition> definitionsFor(AppConfig config) {
-        return enabledToolNames(config).stream()
-                .map(toolName -> definition(toolName, config))
-                .toList();
-    }
-
     public static AgentToolDefinition definition(String toolName, AppConfig config) {
         return switch (toolName) {
             case TIME_NOW -> timeNow(Clock.systemUTC());
@@ -66,7 +55,7 @@ public final class SampleTools {
 
     public static AgentToolDefinition timeNow(Clock clock) {
         return AgentToolDefinition.named(TIME_NOW)
-                .describedAs("Gets the current time for a requested time zone.")
+                .describedAs("Gets the current date and time for a given IANA time zone. Required argument: zone (e.g. UTC, Europe/London, America/New_York, Asia/Tokyo). If the user has not specified a time zone, ask them before calling this tool.")
                 .timeout(Duration.ofSeconds(5))
                 .handledBy(request -> CompletableFuture.completedFuture(currentTime(clock, request)))
                 .build();
@@ -117,25 +106,23 @@ public final class SampleTools {
                 .build();
     }
 
-    public static List<String> parseEnabledTools(String value) {
-        if (value == null || value.isBlank()) {
-            return List.of();
-        }
-        return Arrays.stream(value.split(","))
-                .map(String::trim)
-                .map(toolName -> toolName.toLowerCase().replace("\"", "").replace("[", "").replace("]", ""))
-                .filter(toolName -> !toolName.isBlank())
-                .filter(toolName -> !"none".equals(toolName))
-                .filter(toolName -> !"null".equals(toolName))
-                .toList();
-    }
-
     private static AgentToolResult currentTime(Clock clock, AgentToolRequest request) {
-        String zone = request.arguments().getOrDefault("zone", "UTC");
+        String zone = request.arguments().get("zone");
+        if (zone == null || zone.isBlank()) {
+            return AgentToolResult.failure(new IllegalArgumentException(
+                    "Required argument 'zone' is missing. Ask the user for their time zone, or use one of: "
+                    + "UTC, Europe/London, America/New_York, America/Chicago, America/Denver, America/Los_Angeles, "
+                    + "America/Sao_Paulo, Africa/Johannesburg, Asia/Dubai, Asia/Kolkata, Asia/Tokyo, Australia/Sydney."));
+        }
         try {
             ZoneId zoneId = ZoneId.of(zone);
             Instant now = clock.instant();
             return AgentToolResult.success(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(now.atZone(zoneId)));
+        } catch (java.time.zone.ZoneRulesException exception) {
+            return AgentToolResult.failure(new IllegalArgumentException(
+                    "Unknown time zone '" + zone + "'. Use an IANA zone ID such as: "
+                    + "UTC, Europe/London, America/New_York, Asia/Tokyo, Australia/Sydney. "
+                    + "Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"));
         } catch (RuntimeException exception) {
             return AgentToolResult.failure(exception);
         }
@@ -148,7 +135,7 @@ public final class SampleTools {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(uri)
                 .version(HttpClient.Version.HTTP_1_1)
-                .timeout(Duration.ofSeconds(8))
+                .timeout(Duration.ofSeconds(30))
                 .header("User-Agent", "pekko-agent-runtime-sample/0.1 (+https://localhost)")
                 .header("Accept", "application/json")
                 .GET()

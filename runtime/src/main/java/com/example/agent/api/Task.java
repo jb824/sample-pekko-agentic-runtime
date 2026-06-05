@@ -1,5 +1,6 @@
 package com.example.agent.api;
 
+@Deprecated(forRemoval = false)
 public record Task(String type, int maxIterations) {
     public static Builder of(Class<?> taskType) {
         return new Builder(taskType.getName());
@@ -24,6 +25,10 @@ public record Task(String type, int maxIterations) {
 
         public Task build() {
             return new Task(type, Math.max(1, maxIterations));
+        }
+
+        public AgentTaskDefinition definition() {
+            return AgentTaskDefinition.named(type).maxIterations(maxIterations).build();
         }
     }
 }

@@ -27,13 +27,9 @@ dependencies {
 
     api(platform("org.apache.pekko:pekko-bom_2.13:1.6.0"))
     api("org.apache.pekko:pekko-actor-typed_2.13")
-    implementation("org.apache.pekko:pekko-cluster-sharding-typed_2.13")
-    implementation("org.apache.pekko:pekko-persistence-typed_2.13")
-    implementation("org.apache.pekko:pekko-serialization-jackson_2.13")
     implementation("org.apache.pekko:pekko-stream_2.13")
     implementation("org.apache.pekko:pekko-slf4j_2.13")
     api("org.apache.pekko:pekko-http_2.13:1.3.0")
-    implementation("org.apache.pekko:pekko-persistence-cassandra_2.13:1.1.0")
     implementation("dev.langchain4j:langchain4j-ollama:1.15.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.19.2")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.19.2")

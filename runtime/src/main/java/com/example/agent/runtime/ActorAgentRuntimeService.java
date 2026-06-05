@@ -1,8 +1,8 @@
 package com.example.agent.runtime;
 
+import com.example.agent.api.AgentSystem;
 import com.example.agent.gateway.GatewayActor;
 import com.example.agent.protocol.AgentRequest;
-import com.example.agent.runtime.agent.AgentSystemDefinition;
 import com.example.agent.runtime.telemetry.Telemetry;
 import io.opentelemetry.api.trace.Span;
 import org.apache.pekko.actor.typed.ActorRef;
@@ -22,7 +22,7 @@ public final class ActorAgentRuntimeService implements AgentRuntimeService {
     }
 
     @Override
-    public CompletionStage<AgentResult> invoke(AgentRequest request, AgentSystemDefinition agentSystem, Duration timeout) {
+    public CompletionStage<AgentResult> invoke(AgentRequest request, AgentSystem agentSystem, Duration timeout) {
         Span span = Telemetry.startInternalSpan("runtime.invoke");
         span.setAttribute("agent.request_id", request.requestId());
         span.setAttribute("agent.timeout_ms", timeout.toMillis());

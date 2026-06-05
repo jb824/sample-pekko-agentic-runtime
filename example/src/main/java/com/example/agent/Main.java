@@ -2,6 +2,7 @@ package com.example.agent;
 
 import com.example.agent.adapter.grpc.GrpcServerAdapter;
 import com.example.agent.api.Agent;
+import com.example.agent.api.AgentTaskDefinition;
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
 import com.example.agent.api.GatewayAgent;
@@ -23,11 +24,6 @@ import com.example.agent.runtime.ActorAgentRuntimeService;
 import com.example.agent.runtime.AgentError;
 import com.example.agent.runtime.AgentResult;
 import com.example.agent.runtime.AgentRuntimeService;
-import com.example.agent.runtime.agent.AgentDefinition;
-import com.example.agent.runtime.agent.AgentSystemDefinition;
-import com.example.agent.runtime.agent.GatewayAgentDefinition;
-import com.example.agent.runtime.agent.MemoryDefinition;
-import com.example.agent.runtime.agent.TaskDefinition;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.runtime.memory.InMemoryAgentMemoryStore;
 import com.example.agent.runtime.task.AgentTaskRegistryActor;
@@ -71,7 +67,7 @@ public final class Main {
                     "llm-worker"
             );
             ActorRef<ToolProtocol.Command> toolRegistry = context.spawn(
-                    ToolRegistryActor.create(List.of()),
+                    ToolRegistryActor.create(List.of(), config.toolThreads(), config.toolQueueSize()),
                     "tool-registry"
             );
             ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry = context.spawn(
@@ -83,7 +79,7 @@ public final class Main {
                     RagRuntimeActor.create(ragComponents.retriever(), ragComponents.indexer()),
                     "rag-runtime"
             );
-            AgentSystemDefinition defaultSystem = defaultAgentSystem(config);
+            AgentSystem defaultSystem = defaultAgentSystem(config);
             context.getLog().info(
                     "Loaded runtime config from {} (file-loaded={} env-overrides-active={})",
                     config.configPath(),
@@ -106,7 +102,8 @@ public final class Main {
                             config.ragTopK(),
                             config.ragMaxContextChars(),
                             config.workflowTimeout(),
-                            config.toolTimeout()
+                            config.toolTimeout(),
+                            config.maxConcurrentRequests()
                     ),
                     "gateway"
             );
@@ -252,72 +249,23 @@ public final class Main {
         transportSystem.getWhenTerminated().toCompletableFuture().join();
     }
 
-    private static AgentSystemDefinition defaultAgentSystem(AppConfig config) {
-        AgentSystem system = defaultApiAgentSystem(config);
-        return new AgentSystemDefinition(
-                new GatewayAgentDefinition(
-                        system.entrypoint().name(),
-                        system.entrypoint().instructions(),
-                        system.entrypoint().tools(),
-                        memory(
-                                system.entrypoint().memory().enabled(),
-                                system.entrypoint().memory().maxEvents(),
-                                system.entrypoint().memory().rememberUserTasks(),
-                                system.entrypoint().memory().rememberToolObservations(),
-                                system.entrypoint().memory().rememberAgentOutputs(),
-                                system.entrypoint().memory().rememberFinalAnswers(),
-                                system.entrypoint().memory().rememberFailures()
-                        ),
-                        new TaskDefinition(system.entrypoint().acceptedTask().type(), system.entrypoint().acceptedTask().maxIterations()),
-                        system.entrypoint().delegates()
-                ),
-                system.agents().stream()
-                        .map(agent -> new AgentDefinition(
-                                agent.name(),
-                                agent.instructions(),
-                                agent.tools(),
-                                memory(
-                                        agent.memory().enabled(),
-                                        agent.memory().maxEvents(),
-                                        agent.memory().rememberUserTasks(),
-                                        agent.memory().rememberToolObservations(),
-                                        agent.memory().rememberAgentOutputs(),
-                                        agent.memory().rememberFinalAnswers(),
-                                        agent.memory().rememberFailures()
-                                )
-                        ))
-                        .toList()
-        );
-    }
-
-    private static MemoryDefinition memory(
-            boolean enabled,
-            int maxEvents,
-            boolean rememberUserTasks,
-            boolean rememberToolObservations,
-            boolean rememberAgentOutputs,
-            boolean rememberFinalAnswers,
-            boolean rememberFailures
-    ) {
-        return new MemoryDefinition(
-                enabled,
-                maxEvents,
-                rememberUserTasks,
-                rememberToolObservations,
-                rememberAgentOutputs,
-                rememberFinalAnswers,
-                rememberFailures
-        );
+    private static AgentSystem defaultAgentSystem(AppConfig config) {
+        return defaultApiAgentSystem(config);
     }
 
     private static AgentSystem defaultApiAgentSystem(AppConfig config) {
         String[] tools = parseEnabledTools(config.enabledTools()).toArray(String[]::new);
+        AgentTaskDefinition task = AgentTaskDefinition.named("agent.request")
+                .describedAs("Handle a generic agent request.")
+                .maxIterations(1)
+                .build();
         Agent assistant = Agent.named("assistant")
                 .instructedBy("Answer the user request directly, use tools when available, and return a concise factual result.")
+                .accepts(task)
                 .uses(tools)
                 .build();
         GatewayAgent gateway = GatewayAgent.named("gateway")
-                .accepts(Task.of("agent.request").maxIterations(1).build())
+                .accepts(task)
                 .delegatesTo(assistant)
                 .instructedBy("Delegate the request to the assistant agent and return the final answer.")
                 .build();

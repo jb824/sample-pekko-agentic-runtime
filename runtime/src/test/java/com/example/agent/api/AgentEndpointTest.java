@@ -20,9 +20,10 @@ class AgentEndpointTest {
     }
 
     private static AgentWorkflow workflow() {
-        Agent agent = Agent.named("assistant").build();
+        AgentTaskDefinition task = AgentTaskDefinition.named("agent.request").build();
+        Agent agent = Agent.named("assistant").accepts(task).build();
         GatewayAgent gateway = GatewayAgent.named("assistant-gateway")
-                .accepts(Task.of("agent.request").build())
+                .accepts(task)
                 .delegatesTo(agent)
                 .build();
         AgentSystem system = AgentSystem.builder().entrypoint(gateway).agent(agent).build();
@@ -33,8 +34,8 @@ class AgentEndpointTest {
             }
 
             @Override
-            public String taskType() {
-                return "agent.request";
+            public AgentTaskDefinition taskDefinition() {
+                return task;
             }
 
             @Override

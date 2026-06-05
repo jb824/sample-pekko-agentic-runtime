@@ -1,7 +1,7 @@
 package com.example.agent.adapter.grpc;
 
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTask;
+import com.example.agent.api.AgentTaskRequest;
 import com.example.agent.runtime.AgentResult;
 import com.example.agent.runtime.grpc.AgentRuntime;
 import com.example.agent.runtime.grpc.Error;
@@ -31,7 +31,7 @@ public final class AgentRuntimePekkoGrpcService implements AgentRuntime {
         return runtime.run(
                         request.getRequestId(),
                         defaultSystem,
-                        AgentTask.of(defaultSystem.entrypoint().acceptedTask().type()).instructions(request.getInput()).build(),
+                        AgentTaskRequest.of(defaultSystem.entrypoint().acceptedTask().name()).instructions(request.getInput()).build(),
                         timeout
                 )
                 .thenApply(AgentRuntimePekkoGrpcService::toProto)

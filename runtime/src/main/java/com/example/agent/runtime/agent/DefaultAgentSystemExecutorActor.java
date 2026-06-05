@@ -1,5 +1,10 @@
 package com.example.agent.runtime.agent;
 
+import com.example.agent.api.Agent;
+import com.example.agent.api.AgentMemoryConfig;
+import com.example.agent.api.AgentSystem;
+import com.example.agent.api.AgentTaskDefinition;
+import com.example.agent.api.GatewayAgent;
 import com.example.agent.llm.LlmProtocol;
 import com.example.agent.protocol.AgentRequest;
 import com.example.agent.rag.core.RagContextBuilder;
@@ -22,13 +27,11 @@ import org.apache.pekko.actor.typed.javadsl.Behaviors;
 import org.apache.pekko.actor.typed.javadsl.Receive;
 
 import java.time.Duration;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<DefaultAgentSystemExecutorActor.Command> {
@@ -41,19 +44,6 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
     private final RagContextBuilder ragContextBuilder;
     private final Duration executionTimeout;
     private final Duration toolTimeout;
-    private final List<String> observations = new ArrayList<>();
-    private final Map<String, String> delegateOutputs = new LinkedHashMap<>();
-    private final Map<String, List<AgentMemoryEvent>> recalledMemory = new LinkedHashMap<>();
-    private final List<String> sources = new ArrayList<>();
-    private String retrievedKnowledgeContext = "None.";
-    private boolean ragAttempted;
-    private AgentRequest request;
-    private AgentSystemDefinition system;
-    private ActorRef<AgentResult> replyTo;
-    private List<String> pendingTools = List.of();
-    private int pendingToolIndex;
-    private List<AgentDefinition> delegates = List.of();
-    private int pendingDelegateIndex;
 
     public static Behavior<Command> create(
             ActorRef<LlmProtocol.Command> llmWorker,
@@ -104,28 +94,25 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
         this.toolTimeout = Objects.requireNonNull(toolTimeout);
     }
 
-    public sealed interface Command permits Start, ExecutionTimeout, ToolTimeout, WrappedToolResult, WrappedRagResult, WrappedMemoryRecall, WrappedDelegateResponse, WrappedGatewayResponse {
+    public sealed interface Command permits Start, ExecutionTimeout, WrappedToolsRegistered, WrappedRagResult, WrappedStepResult, WrappedGatewayMemoryRecall, WrappedGatewayResponse {
     }
 
-    public record Start(AgentRequest request, AgentSystemDefinition system, ActorRef<AgentResult> replyTo) implements Command {
+    public record Start(AgentRequest request, AgentSystem system, ActorRef<AgentResult> replyTo) implements Command {
     }
 
     private record ExecutionTimeout() implements Command {
     }
 
-    private record ToolTimeout(String toolName) implements Command {
-    }
-
-    private record WrappedToolResult(ToolProtocol.ToolResult result) implements Command {
+    private record WrappedToolsRegistered(ToolProtocol.ToolsRegistered registered) implements Command {
     }
 
     private record WrappedRagResult(RagProtocol.Retrieved retrieved) implements Command {
     }
 
-    private record WrappedMemoryRecall(String agentName, AgentMemoryRegistryActor.Recalled recalled) implements Command {
+    private record WrappedStepResult(AgentStepActor.Result result) implements Command {
     }
 
-    private record WrappedDelegateResponse(String agentName, LlmProtocol.Response response) implements Command {
+    private record WrappedGatewayMemoryRecall(AgentMemoryRegistryActor.Recalled recalled) implements Command {
     }
 
     private record WrappedGatewayResponse(LlmProtocol.Response response) implements Command {
@@ -135,397 +122,390 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
     public Receive<Command> createReceive() {
         return newReceiveBuilder()
                 .onMessage(Start.class, this::onStart)
-                .onMessage(ExecutionTimeout.class, this::onExecutionTimeout)
-                .onMessage(ToolTimeout.class, this::onToolTimeout)
-                .onMessage(WrappedToolResult.class, this::onWrappedToolResult)
-                .onMessage(WrappedRagResult.class, this::onWrappedRagResult)
-                .onMessage(WrappedMemoryRecall.class, this::onWrappedMemoryRecall)
-                .onMessage(WrappedDelegateResponse.class, this::onWrappedDelegateResponse)
-                .onMessage(WrappedGatewayResponse.class, this::onWrappedGatewayResponse)
                 .build();
     }
 
     private Behavior<Command> onStart(Start start) {
-        request = start.request();
-        system = start.system();
-        replyTo = start.replyTo();
+        ExecutionState state = ExecutionState.initial(start.request(), start.system(), start.replyTo());
         getContext().scheduleOnce(executionTimeout, getContext().getSelf(), new ExecutionTimeout());
         getContext().getLog().info(
-                "Agent system accepted request {} gateway={} delegates={}",
-                request.requestId(),
-                system.entrypoint().name(),
-                system.entrypoint().delegates()
-        );
-        pendingTools = toolsFor(system);
-        delegates = delegatesFor(system);
-        return requestNextToolOrRag();
-    }
+                "Agent system accepted request={} gateway={} delegates={}",
+                state.request().requestId(), state.system().entrypoint().name(), state.system().entrypoint().delegates());
 
-    private Behavior<Command> requestNextToolOrRag() {
-        if (pendingToolIndex >= pendingTools.size()) {
-            return requestRagOrDelegation();
+        var toolDefs = state.system().toolDefinitions();
+        if (!toolDefs.isEmpty()) {
+            ActorRef<ToolProtocol.ToolsRegistered> adapter =
+                    getContext().messageAdapter(ToolProtocol.ToolsRegistered.class, WrappedToolsRegistered::new);
+            toolRegistry.tell(new ToolProtocol.RegisterTools(
+                    state.request().requestId() + ":register",
+                    state.request().tenantId(),
+                    toolDefs,
+                    adapter));
+            return waitingForToolRegistration(state);
         }
-        String toolName = pendingTools.get(pendingToolIndex);
-        ActorRef<ToolProtocol.ToolResult> adapter = getContext().messageAdapter(ToolProtocol.ToolResult.class, WrappedToolResult::new);
-        getContext().scheduleOnce(toolTimeout, getContext().getSelf(), new ToolTimeout(toolName));
-        toolRegistry.tell(new ToolProtocol.InvokeTool(
-                request.requestId() + ":agent-system:tool:" + pendingToolIndex + ":" + toolName,
-                request.tenantId(),
-                toolName,
-                request.input(),
-                Map.of(),
-                adapter
-        ));
-        return this;
+        return afterRegistration(state);
     }
 
-    private Behavior<Command> onWrappedToolResult(WrappedToolResult wrapped) {
-        ToolProtocol.ToolResult result = wrapped.result();
-        if (result.isSuccess()) {
-            observations.add("Tool " + result.toolName() + ":\n" + result.output());
-            sources.addAll(result.sources());
+    private Behavior<Command> waitingForToolRegistration(ExecutionState state) {
+        return Behaviors.receive(Command.class)
+                .onMessage(WrappedToolsRegistered.class, msg -> onToolsRegistered(state, msg))
+                .onMessage(ExecutionTimeout.class, ignored -> onExecutionTimeout(state))
+                .build();
+    }
+
+    private Behavior<Command> onToolsRegistered(ExecutionState state, WrappedToolsRegistered msg) {
+        getContext().getLog().debug(
+                "Tools registered request={} count={}",
+                state.request().requestId(), msg.registered().registeredCount());
+        return afterRegistration(state);
+    }
+
+    private Behavior<Command> afterRegistration(ExecutionState state) {
+        if (ragEnabled) {
+            ActorRef<RagProtocol.Retrieved> adapter =
+                    getContext().messageAdapter(RagProtocol.Retrieved.class, WrappedRagResult::new);
+            ragRuntime.tell(new RagProtocol.Retrieve(
+                    state.request().requestId() + ":rag",
+                    state.request().input(),
+                    new RagSecurityContext(state.request().tenantId(), "", Map.of()),
+                    ragTopK,
+                    adapter));
+            return waitingForRag(state);
+        }
+        return runNextDelegate(state);
+    }
+
+    private Behavior<Command> waitingForRag(ExecutionState state) {
+        return Behaviors.receive(Command.class)
+                .onMessage(WrappedRagResult.class, wrapped -> onRagResult(state, wrapped))
+                .onMessage(ExecutionTimeout.class, ignored -> onExecutionTimeout(state))
+                .build();
+    }
+
+    private Behavior<Command> onRagResult(ExecutionState state, WrappedRagResult wrapped) {
+        ExecutionState next = state;
+        if (wrapped.retrieved().isSuccess() && wrapped.retrieved().result() != null) {
+            RagRetrievalResult result = wrapped.retrieved().result();
+            String context = ragContextBuilder.build(result);
+            List<String> citations = result.chunks().stream()
+                    .map(chunk -> chunk.citation())
+                    .filter(citation -> citation != null && !citation.isBlank())
+                    .toList();
+            next = state.withRag(context, citations);
+            getContext().getLog().info("RAG completed request={} chunks={}",
+                    state.request().requestId(), result.chunks().size());
         } else {
-            observations.add("Tool " + result.toolName() + " failed: " + result.error().getMessage());
+            getContext().getLog().warn("RAG failed or empty request={}", state.request().requestId());
         }
-        pendingToolIndex++;
-        return requestNextToolOrRag();
+        return runNextDelegate(next);
     }
 
-    private Behavior<Command> onToolTimeout(ToolTimeout timeout) {
-        if (pendingToolIndex < pendingTools.size() && pendingTools.get(pendingToolIndex).equals(timeout.toolName())) {
-            observations.add("Tool " + timeout.toolName() + " timed out.");
-            pendingToolIndex++;
-            return requestNextToolOrRag();
+    private Behavior<Command> runNextDelegate(ExecutionState state) {
+        if (state.delegateIndex() >= state.delegates().size()) {
+            return runGatewaySynthesis(state);
         }
-        return this;
-    }
-
-    private Behavior<Command> requestRagOrDelegation() {
-        if (!ragEnabled || ragAttempted) {
-            return requestNextDelegateOrSynthesis();
-        }
-        ragAttempted = true;
-        ActorRef<RagProtocol.Retrieved> adapter = getContext().messageAdapter(RagProtocol.Retrieved.class, WrappedRagResult::new);
-        ragRuntime.tell(new RagProtocol.Retrieve(
-                request.requestId() + ":rag",
-                request.input(),
-                new RagSecurityContext(request.tenantId(), "", Map.of()),
-                ragTopK,
-                adapter
-        ));
-        return this;
-    }
-
-    private Behavior<Command> onWrappedRagResult(WrappedRagResult wrapped) {
-        if (!wrapped.retrieved().isSuccess()) {
-            getContext().getLog().warn(
-                    "RAG retrieval failed request_id={} tenant={} error={}",
-                    request.requestId(),
-                    request.tenantId(),
-                    wrapped.retrieved().failure().toString()
-            );
-            retrievedKnowledgeContext = "None.";
-            return requestNextDelegateOrSynthesis();
-        }
-        RagRetrievalResult result = wrapped.retrieved().result() == null
-                ? RagRetrievalResult.empty()
-                : wrapped.retrieved().result();
-        retrievedKnowledgeContext = ragContextBuilder.build(result);
-        sources.addAll(result.chunks().stream()
-                .map(chunk -> chunk.citation())
-                .filter(citation -> citation != null && !citation.isBlank())
-                .toList());
+        Agent delegate = state.delegates().get(state.delegateIndex());
+        ActorRef<AgentStepActor.Result> stepReply =
+                getContext().messageAdapter(AgentStepActor.Result.class, WrappedStepResult::new);
+        ActorRef<AgentStepActor.Command> stepActor = getContext().spawn(
+                AgentStepActor.create(
+                        llmWorker,
+                        toolRegistry,
+                        memoryRegistry,
+                        state.request(),
+                        state.system().entrypoint().name(),
+                        delegate,
+                        taskFor(state.system(), delegate),
+                        state.request().input(),
+                        state.lastStepOutput(),
+                        state.ragContext(),
+                        state.system().toolDefinitions(),
+                        toolTimeout,
+                        stepReply),
+                "step-" + delegate.name() + "-" + state.request().requestId());
         getContext().getLog().info(
-                "RAG retrieval completed request_id={} tenant={} chunks={}",
-                request.requestId(),
-                request.tenantId(),
-                result.chunks().size()
-        );
-        return requestNextDelegateOrSynthesis();
+                "Spawning step actor request={} agent={} hasPrior={}",
+                state.request().requestId(), delegate.name(), !state.lastStepOutput().isEmpty());
+        stepActor.tell(new AgentStepActor.Start());
+        return runningDelegate(state);
     }
 
-    private Behavior<Command> requestNextDelegateOrSynthesis() {
-        int maxIterations = system.entrypoint().acceptedTask() == null
-                ? 4
-                : system.entrypoint().acceptedTask().resolvedMaxIterations();
-        if (pendingDelegateIndex >= delegates.size() || pendingDelegateIndex >= maxIterations) {
-            return requestGatewaySynthesis();
-        }
-        AgentDefinition delegate = delegates.get(pendingDelegateIndex);
-        if (shouldRecall(delegate.name(), delegate.memory())) {
-            recallMemory(delegate.name(), delegate.memory());
-            return this;
-        }
-        ActorRef<LlmProtocol.Response> adapter = getContext().messageAdapter(
-                LlmProtocol.Response.class,
-                response -> new WrappedDelegateResponse(delegate.name(), response)
-        );
-        llmWorker.tell(new LlmProtocol.Ask(
-                request.requestId() + ":agent-system:delegate:" + delegate.name(),
-                delegatePrompt(delegate),
-                adapter
-        ));
-        return this;
+    private Behavior<Command> runningDelegate(ExecutionState state) {
+        return Behaviors.receive(Command.class)
+                .onMessage(WrappedStepResult.class, wrapped -> onStepResult(state, wrapped))
+                .onMessage(ExecutionTimeout.class, ignored -> onExecutionTimeout(state))
+                .build();
     }
 
-    private Behavior<Command> onWrappedMemoryRecall(WrappedMemoryRecall wrapped) {
-        recalledMemory.put(wrapped.agentName(), wrapped.recalled().events());
-        return requestNextToolOrRag();
-    }
-
-    private Behavior<Command> onWrappedDelegateResponse(WrappedDelegateResponse wrapped) {
-        AgentDefinition delegate = currentDelegate(wrapped.agentName());
-        if (wrapped.response().isSuccess()) {
-            delegateOutputs.put(wrapped.agentName(), wrapped.response().text());
-            if (delegate != null) {
-                remember(delegate.name(), delegate.memory(), AgentMemoryEventType.USER_TASK, request.input());
-                remember(delegate.name(), delegate.memory(), AgentMemoryEventType.AGENT_OUTPUT, wrapped.response().text());
-            }
+    private Behavior<Command> onStepResult(ExecutionState state, WrappedStepResult wrapped) {
+        AgentStepActor.Result result = wrapped.result();
+        ExecutionState next = state.advanceDelegate();
+        if (result.isSuccess()) {
+            next = next.withStepResult(result);
+            getContext().getLog().info(
+                    "Step completed request={} agent={} output_chars={} sources={}",
+                    state.request().requestId(),
+                    result.agentName(),
+                    result.output().length(),
+                    result.sources().size());
         } else {
-            observations.add("Agent " + wrapped.agentName() + " failed: " + wrapped.response().error().getMessage());
-            if (delegate != null) {
-                remember(delegate.name(), delegate.memory(), AgentMemoryEventType.USER_TASK, request.input());
-                remember(delegate.name(), delegate.memory(), AgentMemoryEventType.FAILURE, wrapped.response().error().getMessage());
-            }
+            String err = result.errors().isEmpty() ? "unknown" : result.errors().getFirst().message();
+            getContext().getLog().warn(
+                    "Step failed request={} agent={} error={}",
+                    state.request().requestId(), result.agentName(), err);
         }
-        pendingDelegateIndex++;
-        return requestNextDelegateOrSynthesis();
+        return runNextDelegate(next);
     }
 
-    private Behavior<Command> requestGatewaySynthesis() {
-        GatewayAgentDefinition gateway = system.entrypoint();
-        if (shouldRecall(gateway.name(), gateway.memory())) {
-            recallMemory(gateway.name(), gateway.memory());
-            return this;
+    private Behavior<Command> runGatewaySynthesis(ExecutionState state) {
+        GatewayAgent gateway = state.system().entrypoint();
+        if (gateway.memory() != null && gateway.memory().enabled()) {
+            ActorRef<AgentMemoryRegistryActor.Recalled> adapter =
+                    getContext().messageAdapter(AgentMemoryRegistryActor.Recalled.class, WrappedGatewayMemoryRecall::new);
+            memoryRegistry.tell(new AgentMemoryRegistryActor.Recall(
+                    new AgentMemoryKey(state.request().tenantId(), gateway.name(), gateway.name()),
+                    gateway.memory().maxEvents(),
+                    adapter));
+            return waitingForGatewayMemory(state);
         }
-        ActorRef<LlmProtocol.Response> adapter = getContext().messageAdapter(LlmProtocol.Response.class, WrappedGatewayResponse::new);
+        return askGatewayLlm(state);
+    }
+
+    private Behavior<Command> waitingForGatewayMemory(ExecutionState state) {
+        return Behaviors.receive(Command.class)
+                .onMessage(WrappedGatewayMemoryRecall.class, wrapped -> onGatewayMemoryRecall(state, wrapped))
+                .onMessage(ExecutionTimeout.class, ignored -> onExecutionTimeout(state))
+                .build();
+    }
+
+    private Behavior<Command> onGatewayMemoryRecall(ExecutionState state, WrappedGatewayMemoryRecall msg) {
+        List<AgentMemoryEvent> memory = msg.recalled().events() == null ? List.of() : msg.recalled().events();
+        return askGatewayLlm(state.withGatewayMemory(memory));
+    }
+
+    private Behavior<Command> askGatewayLlm(ExecutionState state) {
+        ActorRef<LlmProtocol.Response> adapter =
+                getContext().messageAdapter(LlmProtocol.Response.class, WrappedGatewayResponse::new);
         llmWorker.tell(new LlmProtocol.Ask(
-                request.requestId() + ":agent-system:gateway:" + system.entrypoint().name(),
-                gatewayPrompt(),
-                adapter
-        ));
-        return this;
+                state.request().requestId() + ":gateway:" + state.system().entrypoint().name(),
+                GatewayPromptBuilder.build(
+                        state.request(),
+                        state.system().entrypoint(),
+                        state.delegateOutputs(),
+                        state.gatewayMemory(),
+                        state.ragContext()),
+                adapter));
+        return waitingForGatewayLlm(state);
     }
 
-    private Behavior<Command> onWrappedGatewayResponse(WrappedGatewayResponse wrapped) {
+    private Behavior<Command> waitingForGatewayLlm(ExecutionState state) {
+        return Behaviors.receive(Command.class)
+                .onMessage(WrappedGatewayResponse.class, wrapped -> onGatewayResponse(state, wrapped))
+                .onMessage(ExecutionTimeout.class, ignored -> onExecutionTimeout(state))
+                .build();
+    }
+
+    private Behavior<Command> onGatewayResponse(ExecutionState state, WrappedGatewayResponse wrapped) {
         if (!wrapped.response().isSuccess()) {
-            rememberGateway(AgentMemoryEventType.USER_TASK, request.input());
-            rememberObservationsForGateway();
-            rememberGateway(AgentMemoryEventType.FAILURE, wrapped.response().error().getMessage());
-            replyTo.tell(new AgentResult(
-                    request.requestId(),
+            String err = wrapped.response().error() != null
+                    ? wrapped.response().error().getMessage() : "gateway LLM failure";
+            rememberGateway(state, AgentMemoryEventType.FAILURE, err);
+            state.replyTo().tell(new AgentResult(
+                    state.request().requestId(),
                     AgentStatus.FAILED_SYSTEM,
                     "",
-                    sources.stream().distinct().toList(),
-                    List.of(new AgentError("gateway_synthesis_failed", wrapped.response().error().getMessage(), false, "agent-system"))
-            ));
+                    state.distinctSources(),
+                    List.of(new AgentError("gateway_synthesis_failed", err, false, "gateway"))));
             return Behaviors.stopped();
         }
-        rememberGateway(AgentMemoryEventType.USER_TASK, request.input());
-        rememberObservationsForGateway();
-        rememberGateway(AgentMemoryEventType.FINAL_ANSWER, wrapped.response().text());
-        replyTo.tell(new AgentResult(
-                request.requestId(),
+
+        String answer = wrapped.response().text();
+        rememberGateway(state, AgentMemoryEventType.USER_TASK, state.request().input());
+        rememberGateway(state, AgentMemoryEventType.FINAL_ANSWER, answer);
+        state.replyTo().tell(new AgentResult(
+                state.request().requestId(),
                 AgentStatus.COMPLETED,
-                withSources(wrapped.response().text()),
-                sources.stream().distinct().toList(),
-                List.of()
-        ));
+                withSources(state, answer),
+                state.distinctSources(),
+                List.of()));
         return Behaviors.stopped();
     }
 
-    private Behavior<Command> onExecutionTimeout(ExecutionTimeout timeout) {
-        if (replyTo != null && request != null) {
-            replyTo.tell(new AgentResult(
-                    request.requestId(),
-                    AgentStatus.TIMEOUT,
-                    "",
-                    sources.stream().distinct().toList(),
-                    List.of(new AgentError("agent_system_timeout", "Agent system execution timed out.", true, "agent-system"))
-            ));
-        }
+    private Behavior<Command> onExecutionTimeout(ExecutionState state) {
+        state.replyTo().tell(new AgentResult(
+                state.request().requestId(),
+                AgentStatus.TIMEOUT,
+                "",
+                state.distinctSources(),
+                List.of(new AgentError("executor_timeout", "Agent system execution timed out.", true, "executor"))));
         return Behaviors.stopped();
     }
 
-    private String delegatePrompt(AgentDefinition delegate) {
-        return """
-                You are agent "%s".
-                Instructions:
-                %s
-
-                User task:
-                %s
-
-                Context:
-                - Memory from previous events:
-                %s
-
-                - Retrieved knowledge:
-                %s
-
-                - Shared observations from this run:
-                %s
-
-                Return only your contribution. Be concise and factual.
-                """.formatted(
-                safe(delegate.name()),
-                safe(delegate.instructions()),
-                request.input(),
-                memorySection(delegate.name()),
-                retrievedKnowledgeContext,
-                observations.isEmpty() ? "None." : String.join("\n\n", observations)
-        );
-    }
-
-    private String gatewayPrompt() {
-        String delegateContext = delegateOutputs.isEmpty()
-                ? "No delegated agent outputs."
-                : delegateOutputs.entrySet().stream()
-                .map(entry -> "Agent " + entry.getKey() + ":\n" + entry.getValue())
-                .collect(Collectors.joining("\n\n"));
-        return """
-                You are gateway agent "%s".
-                Instructions:
-                %s
-
-                User task:
-                %s
-
-                Context:
-                - Memory from previous events:
-                %s
-
-                - Retrieved knowledge:
-                %s
-
-                - Tool observations from this run:
-                %s
-
-                - Delegated agent outputs from this run:
-                %s
-
-                Produce the final answer for the user.
-                """.formatted(
-                safe(system.entrypoint().name()),
-                safe(system.entrypoint().instructions()),
-                request.input(),
-                memorySection(system.entrypoint().name()),
-                retrievedKnowledgeContext,
-                observations.isEmpty() ? "None." : String.join("\n\n", observations),
-                delegateContext
-        );
-    }
-
-    private boolean shouldRecall(String agentName, MemoryDefinition memory) {
-        return memory != null && memory.enabled() && !recalledMemory.containsKey(agentName);
-    }
-
-    private void recallMemory(String agentName, MemoryDefinition memory) {
-        ActorRef<AgentMemoryRegistryActor.Recalled> adapter = getContext().messageAdapter(
-                AgentMemoryRegistryActor.Recalled.class,
-                recalled -> new WrappedMemoryRecall(agentName, recalled)
-        );
-        memoryRegistry.tell(new AgentMemoryRegistryActor.Recall(memoryKey(agentName), memory.maxEvents(), adapter));
-    }
-
-    private void rememberGateway(AgentMemoryEventType type, String content) {
-        GatewayAgentDefinition gateway = system.entrypoint();
-        remember(gateway.name(), gateway.memory(), type, content);
-    }
-
-    private void rememberObservationsForGateway() {
-        for (String observation : observations) {
-            rememberGateway(AgentMemoryEventType.TOOL_OBSERVATION, observation);
-        }
-    }
-
-    private void remember(String agentName, MemoryDefinition memory, AgentMemoryEventType type, String content) {
-        if (memory == null || !memory.shouldRemember(type) || content == null || content.isBlank()) {
+    private void rememberGateway(ExecutionState state, AgentMemoryEventType type, String content) {
+        GatewayAgent gateway = state.system().entrypoint();
+        if (!shouldRemember(gateway.memory(), type) || content == null || content.isBlank()) {
             return;
         }
-        memoryRegistry.tell(new AgentMemoryRegistryActor.Append(memoryKey(agentName), type, request.requestId(), content, memory.maxEvents()));
+        memoryRegistry.tell(new AgentMemoryRegistryActor.Append(
+                new AgentMemoryKey(state.request().tenantId(), gateway.name(), gateway.name()),
+                type,
+                state.request().requestId(),
+                content,
+                gateway.memory().maxEvents()));
     }
 
-    private AgentDefinition currentDelegate(String agentName) {
-        return delegates.stream()
-                .filter(delegate -> delegate.name().equals(agentName))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private AgentMemoryKey memoryKey(String agentName) {
-        return new AgentMemoryKey(request.tenantId(), system.entrypoint().name(), agentName);
-    }
-
-    private String memorySection(String agentName) {
-        List<AgentMemoryEvent> events = recalledMemory.getOrDefault(agentName, List.of());
-        if (events.isEmpty()) {
-            return "None.";
-        }
-        return events.stream()
-                .map(event -> "- [%s] %s".formatted(event.type(), truncate(event.content())))
-                .collect(Collectors.joining("\n"));
-    }
-
-    private static String truncate(String value) {
-        if (value == null) {
-            return "";
-        }
-        String stripped = value.strip();
-        return stripped.length() <= 1200 ? stripped : stripped.substring(0, 1200) + "...";
-    }
-
-    private static List<String> toolsFor(AgentSystemDefinition system) {
-        Set<String> tools = new LinkedHashSet<>(system.entrypoint().tools());
-        Map<String, AgentDefinition> agents = system.agents().stream()
-                .collect(Collectors.toMap(AgentDefinition::name, agent -> agent, (first, second) -> first));
-        for (String delegate : system.entrypoint().delegates()) {
-            AgentDefinition agent = agents.get(delegate);
-            if (agent != null) {
-                tools.addAll(agent.tools());
-            }
-        }
-        return List.copyOf(tools);
-    }
-
-    private static List<AgentDefinition> delegatesFor(AgentSystemDefinition system) {
-        Map<String, AgentDefinition> agents = system.agents().stream()
-                .collect(Collectors.toMap(AgentDefinition::name, agent -> agent, (first, second) -> first));
-        List<AgentDefinition> selected = new ArrayList<>();
-        for (String delegate : system.entrypoint().delegates()) {
-            AgentDefinition agent = agents.get(delegate);
-            if (agent != null) {
-                selected.add(agent);
-            }
-        }
-        return selected;
-    }
-
-    private String withSources(String answer) {
-        if (sources.isEmpty() || sources.stream().anyMatch(answer::contains)) {
+    private static String withSources(ExecutionState state, String answer) {
+        List<String> distinct = state.distinctSources();
+        if (distinct.isEmpty() || distinct.stream().anyMatch(answer::contains)) {
             return answer;
         }
-        return answer.stripTrailing() + "\n\nSources:\n" + sources.stream()
-                .distinct()
-                .map(source -> "- " + source)
-                .collect(Collectors.joining("\n"));
+        return answer.stripTrailing() + "\n\nSources:\n"
+                + distinct.stream().map(source -> "- " + source).collect(Collectors.joining("\n"));
     }
 
-    private static List<String> sourceUrls(String toolOutput) {
-        if (toolOutput == null || toolOutput.isBlank()) {
-            return List.of();
-        }
-        return toolOutput.lines()
-                .map(String::trim)
-                .filter(line -> line.startsWith("URL:"))
-                .map(line -> line.substring("URL:".length()).trim())
-                .filter(url -> !url.isBlank())
-                .filter(url -> !"<unknown>".equals(url))
-                .distinct()
+    private static AgentTaskDefinition taskFor(AgentSystem system, Agent delegate) {
+        return delegate.acceptedTasks().isEmpty()
+                ? system.entrypoint().acceptedTask()
+                : delegate.acceptedTasks().getFirst();
+    }
+
+    private static List<Agent> delegatesFor(AgentSystem system) {
+        Map<String, Agent> byName = system.agents().stream()
+                .collect(Collectors.toMap(Agent::name, agent -> agent, (left, right) -> left));
+        return system.entrypoint().delegates().stream()
+                .map(byName::get)
+                .filter(Objects::nonNull)
                 .toList();
     }
 
-    private static String safe(String value) {
-        return value == null || value.isBlank() ? "None." : value;
+    private static boolean shouldRemember(AgentMemoryConfig memory, AgentMemoryEventType type) {
+        if (memory == null) {
+            return false;
+        }
+        return memory.shouldRemember(switch (type) {
+            case USER_TASK -> AgentMemoryConfig.MemoryEventType.USER_TASK;
+            case TOOL_OBSERVATION -> AgentMemoryConfig.MemoryEventType.TOOL_OBSERVATION;
+            case AGENT_OUTPUT -> AgentMemoryConfig.MemoryEventType.AGENT_OUTPUT;
+            case FINAL_ANSWER -> AgentMemoryConfig.MemoryEventType.FINAL_ANSWER;
+            case FAILURE -> AgentMemoryConfig.MemoryEventType.FAILURE;
+        });
+    }
+
+    private record ExecutionState(
+            AgentRequest request,
+            AgentSystem system,
+            ActorRef<AgentResult> replyTo,
+            List<Agent> delegates,
+            int delegateIndex,
+            String ragContext,
+            String lastStepOutput,
+            Map<String, String> delegateOutputs,
+            List<String> allSources,
+            List<AgentMemoryEvent> gatewayMemory
+    ) {
+        private ExecutionState {
+            request = Objects.requireNonNull(request);
+            system = Objects.requireNonNull(system);
+            replyTo = Objects.requireNonNull(replyTo);
+            delegates = delegates == null ? List.of() : List.copyOf(delegates);
+            delegateIndex = Math.max(0, delegateIndex);
+            ragContext = ragContext == null || ragContext.isBlank() ? "None." : ragContext;
+            lastStepOutput = lastStepOutput == null ? "" : lastStepOutput;
+            delegateOutputs = immutableLinkedMap(delegateOutputs);
+            allSources = allSources == null ? List.of() : List.copyOf(allSources);
+            gatewayMemory = gatewayMemory == null ? List.of() : List.copyOf(gatewayMemory);
+        }
+
+        static ExecutionState initial(AgentRequest request, AgentSystem system, ActorRef<AgentResult> replyTo) {
+            return new ExecutionState(
+                    request,
+                    system,
+                    replyTo,
+                    delegatesFor(system),
+                    0,
+                    "None.",
+                    "",
+                    Map.of(),
+                    List.of(),
+                    List.of());
+        }
+
+        ExecutionState withRag(String ragContext, List<String> sources) {
+            return new ExecutionState(
+                    request,
+                    system,
+                    replyTo,
+                    delegates,
+                    delegateIndex,
+                    ragContext,
+                    lastStepOutput,
+                    delegateOutputs,
+                    append(allSources, sources),
+                    gatewayMemory);
+        }
+
+        ExecutionState advanceDelegate() {
+            return new ExecutionState(
+                    request,
+                    system,
+                    replyTo,
+                    delegates,
+                    delegateIndex + 1,
+                    ragContext,
+                    lastStepOutput,
+                    delegateOutputs,
+                    allSources,
+                    gatewayMemory);
+        }
+
+        ExecutionState withStepResult(AgentStepActor.Result result) {
+            Map<String, String> outputs = new LinkedHashMap<>(delegateOutputs);
+            outputs.put(result.agentName(), result.output());
+            return new ExecutionState(
+                    request,
+                    system,
+                    replyTo,
+                    delegates,
+                    delegateIndex,
+                    ragContext,
+                    result.output(),
+                    outputs,
+                    append(allSources, result.sources()),
+                    gatewayMemory);
+        }
+
+        ExecutionState withGatewayMemory(List<AgentMemoryEvent> memory) {
+            return new ExecutionState(
+                    request,
+                    system,
+                    replyTo,
+                    delegates,
+                    delegateIndex,
+                    ragContext,
+                    lastStepOutput,
+                    delegateOutputs,
+                    allSources,
+                    memory);
+        }
+
+        List<String> distinctSources() {
+            return allSources.stream().distinct().toList();
+        }
+
+        private static Map<String, String> immutableLinkedMap(Map<String, String> values) {
+            if (values == null || values.isEmpty()) {
+                return Map.of();
+            }
+            return Collections.unmodifiableMap(new LinkedHashMap<>(values));
+        }
+
+        private static List<String> append(List<String> existing, List<String> additions) {
+            if (additions == null || additions.isEmpty()) {
+                return existing == null ? List.of() : List.copyOf(existing);
+            }
+            List<String> merged = new java.util.ArrayList<>(existing == null ? List.of() : existing);
+            merged.addAll(additions);
+            return List.copyOf(merged);
+        }
     }
 }

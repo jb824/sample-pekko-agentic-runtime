@@ -11,13 +11,13 @@ public final class AgentEndpoint {
 
     private final String path;
     private final AgentWorkflow workflow;
-    private final Function<String, AgentTask> taskFactory;
+    private final Function<String, AgentTaskRequest> taskFactory;
     private final Mode mode;
 
     private AgentEndpoint(
             String path,
             AgentWorkflow workflow,
-            Function<String, AgentTask> taskFactory,
+            Function<String, AgentTaskRequest> taskFactory,
             Mode mode
     ) {
         this.path = normalizePath(path);
@@ -30,7 +30,7 @@ public final class AgentEndpoint {
         return sync(path, workflow, workflow::task);
     }
 
-    public static AgentEndpoint sync(String path, AgentWorkflow workflow, Function<String, AgentTask> taskFactory) {
+    public static AgentEndpoint sync(String path, AgentWorkflow workflow, Function<String, AgentTaskRequest> taskFactory) {
         return new AgentEndpoint(path, workflow, taskFactory, Mode.SYNC);
     }
 
@@ -38,7 +38,7 @@ public final class AgentEndpoint {
         return async(path, workflow, workflow::task);
     }
 
-    public static AgentEndpoint async(String path, AgentWorkflow workflow, Function<String, AgentTask> taskFactory) {
+    public static AgentEndpoint async(String path, AgentWorkflow workflow, Function<String, AgentTaskRequest> taskFactory) {
         return new AgentEndpoint(path, workflow, taskFactory, Mode.ASYNC);
     }
 
@@ -50,7 +50,7 @@ public final class AgentEndpoint {
         return workflow;
     }
 
-    public AgentTask taskFor(String input) {
+    public AgentTaskRequest taskFor(String input) {
         return taskFactory.apply(input);
     }
 

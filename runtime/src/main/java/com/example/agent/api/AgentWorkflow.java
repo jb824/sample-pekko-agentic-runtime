@@ -5,11 +5,15 @@ import java.time.Duration;
 public interface AgentWorkflow {
     AgentSystem system();
 
-    String taskType();
+    AgentTaskDefinition taskDefinition();
+
+    default String taskType() {
+        return taskDefinition().name();
+    }
 
     Duration timeout();
 
-    default AgentTask task(String input) {
-        return AgentTask.of(taskType()).instructions(input).build();
+    default AgentTaskRequest task(String input) {
+        return taskDefinition().request(input);
     }
 }

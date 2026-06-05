@@ -5,7 +5,7 @@ import com.example.agent.api.AgentMemoryConfig;
 import com.example.agent.api.AgentRunContext;
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTask;
+import com.example.agent.api.AgentTaskRequest;
 import com.example.agent.api.GatewayAgent;
 import com.example.agent.api.Task;
 import dev.langchain4j.model.chat.ChatModel;
@@ -31,8 +31,8 @@ final class AgentMemoryRuntimeTest {
                 .telemetryEnabled(false)
                 .build()) {
             AgentSystem system = singleAgentSystem(AgentMemoryConfig.recentEvents(10));
-            AgentTask first = AgentTask.of("agent.request").instructions("remember alpha").build();
-            AgentTask second = AgentTask.of("agent.request").instructions("use prior memory").build();
+            AgentTaskRequest first = AgentTaskRequest.of("agent.request").instructions("remember alpha").build();
+            AgentTaskRequest second = AgentTaskRequest.of("agent.request").instructions("use prior memory").build();
 
             runtime.run(AgentRunContext.tenant("tenant-a"), "request-1", system, first, Duration.ofSeconds(5))
                     .toCompletableFuture()
@@ -64,11 +64,11 @@ final class AgentMemoryRuntimeTest {
             AgentSystem system = singleAgentSystem(AgentMemoryConfig.recentEvents(10));
 
             runtime.run(AgentRunContext.tenant("tenant-a"), "request-1", system,
-                            AgentTask.of("agent.request").instructions("tenant-a secret").build(), Duration.ofSeconds(5))
+                            AgentTaskRequest.of("agent.request").instructions("tenant-a secret").build(), Duration.ofSeconds(5))
                     .toCompletableFuture()
                     .join();
             runtime.run(AgentRunContext.tenant("tenant-b"), "request-2", system,
-                            AgentTask.of("agent.request").instructions("tenant-b request").build(), Duration.ofSeconds(5))
+                            AgentTaskRequest.of("agent.request").instructions("tenant-b request").build(), Duration.ofSeconds(5))
                     .toCompletableFuture()
                     .join();
         }

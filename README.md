@@ -26,26 +26,35 @@ import com.example.agent.api.AgentMemoryConfig;
 import com.example.agent.api.AgentRunContext;
 import com.example.agent.api.AgentRuntimeClient;
 import com.example.agent.api.AgentSystem;
+import com.example.agent.api.AgentTaskDefinition;
+import com.example.agent.api.AgentTaskRule;
 import com.example.agent.api.AgentToolDefinition;
 import com.example.agent.api.AgentToolResult;
 import com.example.agent.api.AgentWorkflow;
 import com.example.agent.api.GatewayAgent;
-import com.example.agent.api.Task;
 
 import java.util.concurrent.CompletableFuture;
 
 public final class AssistantWorkflow implements AgentWorkflow {
+    private static final AgentTaskDefinition ANSWER_QUESTION = AgentTaskDefinition.named("answer.question")
+            .describedAs("Answer a user's question directly and cite tool results when available.")
+            .template("Answer the following user question:\n{{input}}")
+            .maxIterations(2)
+            .rule(AgentTaskRule.nonEmptyInstructions())
+            .build();
+
     private final AgentSystem system;
 
-    public AssistantWorkflow() {
+    public AssistantWorkflow(AgentToolDefinition timeNow) {
         Agent assistant = Agent.named("assistant")
                 .instructedBy("Answer directly and use available tools when useful.")
-                .uses("time.now")
+                .accepts(ANSWER_QUESTION)
+                .uses(timeNow)
                 .memory(AgentMemoryConfig.recentEvents(20))
                 .build();
 
         GatewayAgent gateway = GatewayAgent.named("assistant-gateway")
-                .accepts(Task.of("agent.request").maxIterations(1).build())
+                .accepts(ANSWER_QUESTION)
                 .delegatesTo(assistant)
                 .build();
 
@@ -56,8 +65,8 @@ public final class AssistantWorkflow implements AgentWorkflow {
         return system;
     }
 
-    public String taskType() {
-        return "agent.request";
+    public AgentTaskDefinition taskDefinition() {
+        return ANSWER_QUESTION;
     }
 
     public java.time.Duration timeout() {
@@ -72,10 +81,10 @@ AgentToolDefinition timeNow = AgentToolDefinition.named("time.now")
         ))
         .build();
 
-try (AgentRuntimeClient client = AgentRuntimeClient.builder().tool(timeNow).build()) {
+try (AgentRuntimeClient client = AgentRuntimeClient.create()) {
     var result = client.run(
             AgentRunContext.tenant("default"),
-            new AssistantWorkflow(),
+            new AssistantWorkflow(timeNow),
             "What time is it?"
     ).toCompletableFuture().join();
 
@@ -129,7 +138,7 @@ Design intent:
 
 ## Embedded Runtime API
 
-The `runtime` module is the library target (`com.example.agent:pekko-agent-runtime`). It contains agent execution, task lifecycle, tools, LLM orchestration, and the small Pekko HTTP bootstrap API under `com.example.agent.http`, so clients only need one runtime dependency.
+The `runtime` module is the library target (`com.example.agent:pekko-agent-runtime`). It contains agent execution, task lifecycle, tools, LLM orchestration, and the small Pekko HTTP bootstrap API under `com.example.agent.http`, so clients only need one runtime dependency. Optional Pekko Persistence Cassandra checkpointing lives in `runtime-checkpoint-cassandra`.
 
 ```java
 import com.example.agent.api.Agent;
@@ -239,7 +248,7 @@ Security/ops notes:
 
 The production recovery model separates durable workflow correctness from large context payloads and inference cache optimization:
 
-- Pekko Persistence Cassandra stores workflow/entity events and snapshots only.
+- Pekko Persistence Cassandra can store workflow/entity events and snapshots through the optional `runtime-checkpoint-cassandra` module.
 - Cassandra application tables under `agent_context` store context manifests and memory chunk metadata/content.
 - Object storage or a document store should hold large raw transcripts/context artifacts.
 - Vector DB/search stores embeddings and retrieval indexes.
@@ -273,7 +282,7 @@ WorkflowEntity starts or moves
   -> prompt rebuild if cache misses
 ```
 
-The Cassandra app schema lives in `runtime/src/main/resources/db/cassandra`. It is intentionally separate from Pekko journal/snapshot keyspaces. The runtime currently uses Pekko Persistence Cassandra for actor recovery; application-table CQL is applied manually until a migration tool is chosen.
+The Cassandra app schema lives in `runtime/src/main/resources/db/cassandra`. It is intentionally separate from Pekko journal/snapshot keyspaces. Core runtime does not require Cassandra; the optional checkpoint module carries Pekko Persistence Cassandra dependencies and configuration. Application-table CQL is applied manually until a migration tool is chosen.
 
 Apply the app schema with `cqlsh` if available:
 
@@ -290,7 +299,7 @@ docker exec -i cassandra-dev cqlsh < runtime/src/main/resources/db/cassandra/001
 Run the opt-in Pekko Persistence Cassandra recovery test when Cassandra is available:
 
 ```bash
-CASSANDRA_INTEGRATION=true ./gradlew --no-configuration-cache :runtime:test --tests com.example.agent.runtime.checkpoint.WorkflowEntityCassandraIntegrationTest
+CASSANDRA_INTEGRATION=true ./gradlew --no-configuration-cache :runtime-checkpoint-cassandra:test --tests com.example.agent.runtime.checkpoint.WorkflowEntityCassandraIntegrationTest
 ```
 
 ## Easy HTTP Bootstrap
@@ -566,11 +575,11 @@ AGENT_PROMPT="What time is it now in UTC?" \
 ```
 
 ```bash
-  LLM_BACKEND=ollama \
-  AGENT_TOOLS=time.now \
-  AGENT_PROMPT="Which month of the year has the letter 'X' in it?" \
-  ./gradlew --no-configuration-cache :client:run
-  ```
+LLM_BACKEND=ollama \
+AGENT_TOOLS=time.now \
+AGENT_PROMPT="Which month of the year has the letter 'X' in it?" \
+./gradlew --no-configuration-cache :client:run
+```
 
 ## Set Up vLLM
 
@@ -661,6 +670,9 @@ The runtime’s LLM/tool execution is bounded by:
 
 - `LLM_THREADS`
 - `LLM_QUEUE_SIZE`
+- `TOOL_THREADS`
+- `TOOL_QUEUE_SIZE`
+- `MAX_CONCURRENT_REQUESTS`
 - `TOOL_TIMEOUT_SECONDS`
 - `WORKFLOW_TIMEOUT_SECONDS`
 - `VLLM_MAX_TOKENS`

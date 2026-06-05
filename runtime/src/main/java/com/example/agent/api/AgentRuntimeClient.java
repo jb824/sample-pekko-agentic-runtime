@@ -4,9 +4,6 @@ import com.example.agent.runtime.AgentResult;
 import com.example.agent.config.AppConfig;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -59,7 +56,6 @@ public final class AgentRuntimeClient implements AutoCloseable {
     }
 
     public static final class Builder {
-        private final List<AgentToolDefinition> tools = new ArrayList<>();
         private AppConfig config = AppConfig.fromEnvironment();
 
         public Builder config(AppConfig config) {
@@ -67,27 +63,8 @@ public final class AgentRuntimeClient implements AutoCloseable {
             return this;
         }
 
-        public Builder tool(AgentToolDefinition tool) {
-            this.tools.add(Objects.requireNonNull(tool));
-            return this;
-        }
-
-        public Builder tools(AgentToolDefinition... tools) {
-            if (tools != null) {
-                this.tools.addAll(Arrays.asList(tools));
-            }
-            return this;
-        }
-
-        public Builder tools(List<AgentToolDefinition> tools) {
-            if (tools != null) {
-                this.tools.addAll(tools);
-            }
-            return this;
-        }
-
         public AgentRuntimeClient build() {
-            return new AgentRuntimeClient(AgentRuntime.builder().config(config).tools(tools).build());
+            return new AgentRuntimeClient(AgentRuntime.builder().config(config).build());
         }
     }
 }

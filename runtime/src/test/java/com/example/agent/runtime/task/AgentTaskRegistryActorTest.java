@@ -1,13 +1,13 @@
 package com.example.agent.runtime.task;
 
+import com.example.agent.api.AgentMemoryConfig;
+import com.example.agent.api.AgentSystem;
+import com.example.agent.api.AgentTaskDefinition;
+import com.example.agent.api.GatewayAgent;
 import com.example.agent.protocol.AgentRequest;
 import com.example.agent.runtime.AgentRuntimeService;
 import com.example.agent.runtime.AgentResult;
 import com.example.agent.runtime.AgentStatus;
-import com.example.agent.runtime.agent.AgentSystemDefinition;
-import com.example.agent.runtime.agent.GatewayAgentDefinition;
-import com.example.agent.runtime.agent.MemoryDefinition;
-import com.example.agent.runtime.agent.TaskDefinition;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.ActorSystem;
 import org.apache.pekko.actor.typed.Props;
@@ -29,11 +29,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class AgentTaskRegistryActorTest {
     private static final Duration ASK_TIMEOUT = Duration.ofSeconds(3);
-    private static final MemoryDefinition TEST_MEMORY = new MemoryDefinition(true, 20, true, true, true, true, true);
-    private static final AgentSystemDefinition TEST_SYSTEM = new AgentSystemDefinition(
-            new GatewayAgentDefinition("gateway", "", List.of(), TEST_MEMORY, new TaskDefinition("test.task", 1), List.of()),
-            List.of()
-    );
+    private static final AgentMemoryConfig TEST_MEMORY = AgentMemoryConfig.defaultEnabled();
+    private static final AgentTaskDefinition TEST_TASK = AgentTaskDefinition.named("test.task").maxIterations(1).build();
+    private static final AgentSystem TEST_SYSTEM = AgentSystem.builder()
+            .entrypoint(GatewayAgent.named("gateway")
+                    .accepts(TEST_TASK)
+                    .memory(TEST_MEMORY)
+                    .build())
+            .build();
 
     private final ActorSystem<Void> system = ActorSystem.create(Behaviors.empty(), "agent-task-registry-test-" + UUID.randomUUID());
 
@@ -99,7 +102,7 @@ final class AgentTaskRegistryActorTest {
     private AgentRuntimeService completedRuntimeService() {
         return new AgentRuntimeService() {
             @Override
-            public CompletionStage<AgentResult> invoke(AgentRequest request, AgentSystemDefinition agentSystem, Duration timeout) {
+            public CompletionStage<AgentResult> invoke(AgentRequest request, AgentSystem agentSystem, Duration timeout) {
                 return completed(request.requestId());
             }
 
