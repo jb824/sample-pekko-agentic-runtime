@@ -18,10 +18,12 @@ import java.util.concurrent.Executor;
 
 public final class AgentConsumerRegistryActor extends AbstractBehavior<AgentConsumerRegistryActor.Command> {
     private final Map<String, ActorRef<ConsumerWorkerActor.Command>> workers = new LinkedHashMap<>();
+    private final Map<Long, PendingDispatch> pendingDispatches = new LinkedHashMap<>();
     private final Executor consumerExecutor;
     private final Duration defaultProcessingTimeout;
     private final int maxQueuedEvents;
     private long workerSequence;
+    private long dispatchSequence;
 
     public static Behavior<Command> create(
             List<AgentConsumer> consumers,
@@ -53,7 +55,7 @@ public final class AgentConsumerRegistryActor extends AbstractBehavior<AgentCons
         this.maxQueuedEvents = Math.max(0, maxQueuedEvents);
     }
 
-    public sealed interface Command permits Register, Unregister, Dispatch, WorkerStopped {
+    public sealed interface Command permits Register, Unregister, Dispatch, WorkerStopped, WrappedProcessCompleted {
     }
 
     public record Register(AgentConsumer consumer) implements Command {
@@ -62,10 +64,25 @@ public final class AgentConsumerRegistryActor extends AbstractBehavior<AgentCons
     public record Unregister(String consumerId) implements Command {
     }
 
-    public record Dispatch(AgentCompletedEvent event) implements Command {
+    public record DispatchAccepted(String requestId, int consumerCount) {
+    }
+
+    public record Dispatch(AgentCompletedEvent event, ActorRef<DispatchAccepted> replyTo) implements Command {
+        public Dispatch(AgentCompletedEvent event) {
+            this(event, null);
+        }
     }
 
     private record WorkerStopped(String consumerId, ActorRef<ConsumerWorkerActor.Command> worker) implements Command {
+    }
+
+    private record WrappedProcessCompleted(long dispatchId, String requestId) implements Command {
+    }
+
+    private record PendingDispatch(String requestId, ActorRef<DispatchAccepted> replyTo, int remaining, int consumerCount) {
+        PendingDispatch decrement() {
+            return new PendingDispatch(requestId, replyTo, remaining - 1, consumerCount);
+        }
     }
 
     @Override
@@ -75,6 +92,7 @@ public final class AgentConsumerRegistryActor extends AbstractBehavior<AgentCons
                 .onMessage(Unregister.class, this::onUnregister)
                 .onMessage(Dispatch.class, this::onDispatch)
                 .onMessage(WorkerStopped.class, this::onWorkerStopped)
+                .onMessage(WrappedProcessCompleted.class, this::onWrappedProcessCompleted)
                 .build();
     }
 
@@ -92,8 +110,40 @@ public final class AgentConsumerRegistryActor extends AbstractBehavior<AgentCons
     }
 
     private Behavior<Command> onDispatch(Dispatch dispatch) {
+        if (dispatch.replyTo() != null) {
+            String requestId = dispatch.event() == null ? "" : dispatch.event().requestId();
+            if (workers.isEmpty()) {
+                dispatch.replyTo().tell(new DispatchAccepted(requestId, 0));
+                return this;
+            }
+            long dispatchId = ++dispatchSequence;
+            pendingDispatches.put(dispatchId, new PendingDispatch(requestId, dispatch.replyTo(), workers.size(), workers.size()));
+            ActorRef<ConsumerWorkerActor.ProcessCompleted> adapter = getContext().messageAdapter(
+                    ConsumerWorkerActor.ProcessCompleted.class,
+                    completed -> new WrappedProcessCompleted(completed.dispatchId(), completed.requestId())
+            );
+            for (ActorRef<ConsumerWorkerActor.Command> worker : workers.values()) {
+                worker.tell(new ConsumerWorkerActor.Process(dispatch.event(), adapter, dispatchId));
+            }
+            return this;
+        }
         for (ActorRef<ConsumerWorkerActor.Command> worker : workers.values()) {
             worker.tell(new ConsumerWorkerActor.Process(dispatch.event()));
+        }
+        return this;
+    }
+
+    private Behavior<Command> onWrappedProcessCompleted(WrappedProcessCompleted completed) {
+        PendingDispatch pending = pendingDispatches.get(completed.dispatchId());
+        if (pending == null) {
+            return this;
+        }
+        PendingDispatch next = pending.decrement();
+        if (next.remaining() <= 0) {
+            pendingDispatches.remove(completed.dispatchId());
+            pending.replyTo().tell(new DispatchAccepted(pending.requestId(), pending.consumerCount()));
+        } else {
+            pendingDispatches.put(completed.dispatchId(), next);
         }
         return this;
     }

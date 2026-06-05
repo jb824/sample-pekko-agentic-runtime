@@ -17,7 +17,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ConsumerWorkerActorTest {
@@ -57,15 +56,20 @@ final class ConsumerWorkerActorTest {
     }
 
     @Test
-    void timeoutDoesNotStartNextEventUntilOriginalInvocationCompletes() throws Exception {
+    void timeoutInterruptsInFlightAndStartsNextEvent() throws Exception {
         CountDownLatch firstStarted = new CountDownLatch(1);
-        CountDownLatch allowFirstToFinish = new CountDownLatch(1);
+        CountDownLatch firstInterrupted = new CountDownLatch(1);
         CountDownLatch secondReceived = new CountDownLatch(1);
         AtomicReference<String> observed = new AtomicReference<>();
         SpyConsumer consumer = new SpyConsumer("spy", event -> {
             if ("request-1".equals(event.requestId())) {
                 firstStarted.countDown();
-                allowFirstToFinish.await(2, TimeUnit.SECONDS);
+                try {
+                    Thread.sleep(5_000L);
+                } catch (InterruptedException interrupted) {
+                    firstInterrupted.countDown();
+                    Thread.currentThread().interrupt();
+                }
                 return ConsumerEffect.done();
             }
             observed.set(event.requestId());
@@ -85,9 +89,7 @@ final class ConsumerWorkerActorTest {
             assertTrue(firstStarted.await(2, TimeUnit.SECONDS));
             worker.tell(new ConsumerWorkerActor.Process(event("request-2")));
 
-            Thread.sleep(150L);
-            assertNull(observed.get());
-            allowFirstToFinish.countDown();
+            assertTrue(firstInterrupted.await(2, TimeUnit.SECONDS));
             assertTrue(secondReceived.await(2, TimeUnit.SECONDS));
             assertEquals("request-2", observed.get());
         } finally {

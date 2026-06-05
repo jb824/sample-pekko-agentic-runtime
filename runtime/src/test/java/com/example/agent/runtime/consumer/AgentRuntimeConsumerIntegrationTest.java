@@ -15,9 +15,11 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class AgentRuntimeConsumerIntegrationTest {
@@ -81,6 +83,31 @@ final class AgentRuntimeConsumerIntegrationTest {
         }
     }
 
+    @Test
+    void validationFailureFutureCompletesAfterConsumerProcessesEvent() throws Exception {
+        AtomicBoolean processed = new AtomicBoolean(false);
+
+        try (AgentRuntime runtime = AgentRuntime.builder()
+                .chatModel(new FixedModel())
+                .consumer(new DelayedConsumer(processed))
+                .telemetryEnabled(false)
+                .build()) {
+            var result = runtime.run(
+                    AgentRunContext.tenant("tenant-a"),
+                    "request-invalid-ack",
+                    system(),
+                    AgentTaskRequest.of("unknown.task").instructions("bad").build(),
+                    Duration.ofSeconds(5)
+            ).toCompletableFuture();
+
+            Thread.sleep(50L);
+            assertFalse(result.isDone());
+
+            assertEquals(com.example.agent.runtime.AgentStatus.FAILED_SYSTEM, result.join().status());
+            assertTrue(processed.get());
+        }
+    }
+
     private static AgentSystem system() {
         Agent assistant = Agent.named("assistant")
                 .instructedBy("Answer.")
@@ -122,6 +149,30 @@ final class AgentRuntimeConsumerIntegrationTest {
         public ConsumerEffect onAgentCompleted(AgentCompletedEvent event) {
             observed.set(event);
             delivered.countDown();
+            return ConsumerEffect.done();
+        }
+    }
+
+    private static final class DelayedConsumer extends AgentConsumer {
+        private final AtomicBoolean processed;
+
+        private DelayedConsumer(AtomicBoolean processed) {
+            this.processed = processed;
+        }
+
+        @Override
+        public String consumerId() {
+            return "delayed-consumer";
+        }
+
+        @Override
+        public ConsumerEffect onAgentCompleted(AgentCompletedEvent event) {
+            try {
+                Thread.sleep(150L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            processed.set(true);
             return ConsumerEffect.done();
         }
     }

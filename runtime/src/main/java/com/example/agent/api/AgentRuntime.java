@@ -25,6 +25,7 @@ import dev.langchain4j.model.chat.ChatModel;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.ActorSystem;
 import org.apache.pekko.actor.typed.Props;
+import org.apache.pekko.actor.typed.javadsl.AskPattern;
 import org.apache.pekko.actor.typed.javadsl.Behaviors;
 
 import java.time.Duration;
@@ -34,6 +35,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public final class AgentRuntime implements AutoCloseable {
@@ -77,15 +79,14 @@ public final class AgentRuntime implements AutoCloseable {
         AgentRunContext resolvedContext = context == null ? AgentRunContext.defaults() : context;
         AgentResult validationFailure = validateTask(requestId, system, task);
         if (validationFailure != null) {
-            dispatchCompleted(
+            return dispatchCompletedAcknowledged(
                     requestId,
                     resolvedContext.tenantId(),
                     system,
                     task,
                     validationFailure,
                     0L
-            );
-            return java.util.concurrent.CompletableFuture.completedFuture(validationFailure);
+            ).thenApply(ignored -> validationFailure);
         }
         return runtimeService.invoke(
                 new AgentRequest(requestId, task.instructions(), resolvedContext.tenantId()),
@@ -154,6 +155,36 @@ public final class AgentRuntime implements AutoCloseable {
                 latencyMs,
                 Instant.now()
         )));
+    }
+
+    private CompletionStage<AgentConsumerRegistryActor.DispatchAccepted> dispatchCompletedAcknowledged(
+            String requestId,
+            String tenantId,
+            AgentSystem system,
+            AgentTaskRequest task,
+            AgentResult result,
+            long latencyMs
+    ) {
+        if (consumerRegistry == null) {
+            return CompletableFuture.completedFuture(new AgentConsumerRegistryActor.DispatchAccepted(requestId, 0));
+        }
+        AgentCompletedEvent event = new AgentCompletedEvent(
+                requestId,
+                tenantId,
+                system.entrypoint().name(),
+                task.instructions(),
+                result.output(),
+                result.status(),
+                result.sources(),
+                latencyMs,
+                Instant.now()
+        );
+        return AskPattern.<AgentConsumerRegistryActor.Command, AgentConsumerRegistryActor.DispatchAccepted>ask(
+                consumerRegistry,
+                replyTo -> new AgentConsumerRegistryActor.Dispatch(event, replyTo),
+                defaultTimeout,
+                actorSystem.scheduler()
+        ).exceptionally(failure -> new AgentConsumerRegistryActor.DispatchAccepted(requestId, 0));
     }
 
     @Override
