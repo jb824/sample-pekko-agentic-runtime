@@ -1,6 +1,8 @@
 package com.example.agent;
 
 import com.example.agent.api.Agent;
+import com.example.agent.api.AgentComponent;
+import com.example.agent.api.AgentEndpoint;
 import com.example.agent.api.AgentMemoryConfig;
 import com.example.agent.api.AgentSystem;
 import com.example.agent.api.GoalDefinition;
@@ -13,6 +15,7 @@ import com.example.agent.tools.WebTools;
 
 import java.time.Duration;
 
+@AgentComponent(id = "assistant-workflow")
 public final class AssistantWorkflow implements AgentWorkflow {
 
     private static final GoalDefinition ANSWER_QUESTION = GoalDefinition.named("answer.question")
@@ -70,5 +73,10 @@ public final class AssistantWorkflow implements AgentWorkflow {
     @Override
     public Duration timeout() {
         return TIMEOUT;
+    }
+
+    @Override
+    public AgentEndpoint endpoint() {
+        return AgentEndpoint.async("/v1/assistant", this);
     }
 }

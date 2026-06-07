@@ -12,5 +12,6 @@ plugins {
 
 rootProject.name = "pekko-agent"
 include("runtime")
+include("runtime-processor")
 include("example")
 include("client")

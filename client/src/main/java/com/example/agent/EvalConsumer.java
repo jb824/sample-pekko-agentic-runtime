@@ -1,6 +1,7 @@
 package com.example.agent;
 
 import com.example.agent.config.AppConfig;
+import com.example.agent.api.AgentComponent;
 import com.example.agent.llm.ChatModelFactory;
 import com.example.agent.runtime.consumer.AgentCompletedEvent;
 import com.example.agent.runtime.consumer.AgentConsumer;
@@ -21,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+@AgentComponent(id = "assistant-response-evaluator", workflow = "assistant-workflow")
 public final class EvalConsumer extends AgentConsumer {
     private static final Logger LOGGER = LoggerFactory.getLogger(EvalConsumer.class);
     private static final Pattern PASS_PATTERN = Pattern.compile("(?im)^\\s*PASS\\s*:\\s*(true|false)\\s*$");
@@ -28,6 +30,7 @@ public final class EvalConsumer extends AgentConsumer {
     private static final Pattern REASON_PATTERN = Pattern.compile("(?ims)^\\s*REASON\\s*:\\s*(.+)$");
 
     private final ChatModel reviewModel;
+    private final boolean enabled;
     private final Set<String> processedRequestIds = ConcurrentHashMap.newKeySet();
     private final Map<String, CompletableFuture<ReviewReport>> reviewsByRequestId = new ConcurrentHashMap<>();
 
@@ -35,8 +38,21 @@ public final class EvalConsumer extends AgentConsumer {
         return new EvalConsumer(ChatModelFactory.create(config));
     }
 
+    public EvalConsumer() {
+        this(AppConfig.fromEnvironment());
+    }
+
+    public EvalConsumer(AppConfig config) {
+        this(ChatModelFactory.create(config), reviewEnabled());
+    }
+
     public EvalConsumer(ChatModel reviewModel) {
+        this(reviewModel, true);
+    }
+
+    private EvalConsumer(ChatModel reviewModel, boolean enabled) {
         this.reviewModel = Objects.requireNonNull(reviewModel);
+        this.enabled = enabled;
     }
 
     @Override
@@ -51,6 +67,9 @@ public final class EvalConsumer extends AgentConsumer {
 
     @Override
     public ConsumerEffect onAgentCompleted(AgentCompletedEvent event) {
+        if (!enabled) {
+            return ConsumerEffect.done();
+        }
         LOGGER.info(
                 "Eval consumer received completion request_id={} status={} output_chars={}",
                 event.requestId(),
@@ -96,6 +115,10 @@ public final class EvalConsumer extends AgentConsumer {
         } catch (Exception exception) {
             return Optional.empty();
         }
+    }
+
+    private static boolean reviewEnabled() {
+        return Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_REVIEW_ENABLED", "false"));
     }
 
     private static String reviewPrompt(AgentCompletedEvent event) {

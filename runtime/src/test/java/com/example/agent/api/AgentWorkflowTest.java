@@ -2,8 +2,11 @@ package com.example.agent.api;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentWorkflowTest {
     @Test
@@ -15,6 +18,27 @@ class AgentWorkflowTest {
         assertEquals("Goal: hello", workflow.goal("hello").instructions());
         assertEquals(workflow.goalDefinition(), workflow.system().goalDefinition("agent.request"));
         assertEquals(1, workflow.system().agents().size());
+        assertEquals("TestWorkflow", workflow.workflowId());
+        assertTrue(workflow.consumers(com.example.agent.config.AppConfig.fromEnvironment()).isEmpty());
+        assertEquals("/v1/agents", workflow.endpoint().path());
+    }
+
+    @Test
+    void discoversNoWorkflowWhenNoServiceProviderIsRegisteredInRuntimeTests() {
+        List<AgentWorkflow> workflows = AgentWorkflow.discover();
+
+        assertTrue(workflows.isEmpty());
+        assertThrows(IllegalStateException.class, AgentWorkflow::init);
+    }
+
+    @Test
+    void registrySelectsWorkflowByIdAndRejectsDuplicateIds() {
+        TestWorkflow workflow = new TestWorkflow();
+        AgentWorkflowRegistry registry = new AgentWorkflowRegistry(List.of(workflow));
+
+        assertEquals(workflow, registry.single());
+        assertEquals(workflow, registry.workflow("TestWorkflow"));
+        assertThrows(IllegalArgumentException.class, () -> new AgentWorkflowRegistry(List.of(workflow, workflow)));
     }
 
     @Test
