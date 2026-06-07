@@ -6,7 +6,6 @@ import com.example.agent.api.AgentRuntime;
 import com.example.agent.config.AppConfig;
 import com.example.agent.http.AgentHttpServer;
 import com.example.agent.runtime.AgentError;
-import com.example.agent.tools.SampleTools;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -17,25 +16,23 @@ public final class Main {
 
     public static void main(String[] args) {
         AppConfig config = AppConfig.fromEnvironment();
-        AssistantWorkflow workflow = new AssistantWorkflow(
-                SampleTools.timeNow(java.time.Clock.systemUTC()),
-                SampleTools.webSearch()
-        );
+        AssistantWorkflow workflow = new AssistantWorkflow();
         if (Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_HTTP", "false"))) {
             runHttp(config, workflow);
             return;
         }
-        AssistantResponseReviewConsumer reviewConsumer = reviewEnabled()
-                ? AssistantResponseReviewConsumer.fromConfig(config)
+        EvalConsumer evalConsumer = evalEnabled()
+                ? EvalConsumer.fromConfig(config)
                 : null;
-        runCli(config, args, workflow, reviewConsumer);
+//        runCli(config, args, workflow, evalConsumer);
+        runHttp(config, workflow);
     }
 
     private static void runCli(
             AppConfig config,
             String[] args,
             AssistantWorkflow workflow,
-            AssistantResponseReviewConsumer reviewConsumer
+            EvalConsumer evalConsumer
     ) {
         String prompt = args.length == 0
                 ? System.getenv().getOrDefault("AGENT_PROMPT", "What time is it?")
@@ -43,16 +40,16 @@ public final class Main {
         AgentRunContext context = AgentRunContext.tenant(System.getenv().getOrDefault("AGENT_TENANT_ID", "default"));
 
         AgentRuntimeClient.Builder builder = AgentRuntimeClient.builder().config(config);
-        if (reviewConsumer != null) {
-            builder.consumer(reviewConsumer);
+        if (evalConsumer != null) {
+            builder.consumer(evalConsumer);
         }
 
         try (AgentRuntimeClient client = builder.build()) {
             var result = client.run(context, workflow, prompt).toCompletableFuture().join();
             if (result.isSuccess()) {
-                System.out.println(result.output());
-                if (reviewConsumer != null) {
-                    reviewConsumer.awaitReview(result.requestId(), reviewTimeout())
+                System.out.printf("\n\n---\n%s\n---\n\n", result.output());
+                if (evalConsumer != null) {
+                    evalConsumer.awaitReview(result.requestId(), evalTimeout())
                             .ifPresent(report -> System.out.println(report.format()));
                 }
                 return;
@@ -68,14 +65,14 @@ public final class Main {
     private static void runHttp(AppConfig config, AssistantWorkflow workflow) {
         int port = Integer.parseInt(System.getenv().getOrDefault("AGENT_HTTP_PORT", "8080"));
         AgentRuntime.Builder runtimeBuilder = AgentRuntime.builder().config(config);
-        if (reviewEnabled()) {
-            runtimeBuilder.consumer(AssistantResponseReviewConsumer.fromConfig(config));
+        if (evalEnabled()) {
+            runtimeBuilder.consumer(EvalConsumer.fromConfig(config));
         }
         AgentRuntime runtime = runtimeBuilder.build();
         AgentHttpServer server = AgentHttpServer.builder()
                 .runtime(runtime)
                 .port(port)
-                .endpoint(AssistantEndpoint.http(workflow))
+                .endpoint(new AssistantHttpEndpoint(runtime, workflow))
                 .build();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             server.close();
@@ -90,11 +87,23 @@ public final class Main {
         }
     }
 
-    private static boolean reviewEnabled() {
-        return Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_REVIEW_ENABLED", "false"));
+    private static boolean evalEnabled() {
+        String explicitEval = System.getenv("AGENT_EVAL_ENABLED");
+        if (explicitEval != null && !explicitEval.isBlank()) {
+            return Boolean.parseBoolean(explicitEval);
+        }
+        String legacyReview = System.getenv("AGENT_REVIEW_ENABLED");
+        if (legacyReview != null && !legacyReview.isBlank()) {
+            return Boolean.parseBoolean(legacyReview);
+        }
+        return true;
     }
 
-    private static Duration reviewTimeout() {
-        return Duration.ofSeconds(Long.parseLong(System.getenv().getOrDefault("AGENT_REVIEW_TIMEOUT_SECONDS", "60")));
+    private static Duration evalTimeout() {
+        String timeout = System.getenv().getOrDefault(
+                "AGENT_EVAL_TIMEOUT_SECONDS",
+                System.getenv().getOrDefault("AGENT_REVIEW_TIMEOUT_SECONDS", "60")
+        );
+        return Duration.ofSeconds(Long.parseLong(timeout));
     }
 }
