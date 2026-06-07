@@ -6,6 +6,8 @@ import com.example.agent.runtime.consumer.AgentCompletedEvent;
 import com.example.agent.runtime.consumer.AgentConsumer;
 import com.example.agent.runtime.consumer.ConsumerEffect;
 import dev.langchain4j.model.chat.ChatModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Locale;
@@ -19,7 +21,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public final class AssistantResponseReviewConsumer extends AgentConsumer {
+public final class EvalConsumer extends AgentConsumer {
+    private static final Logger LOGGER = LoggerFactory.getLogger(EvalConsumer.class);
     private static final Pattern PASS_PATTERN = Pattern.compile("(?im)^\\s*PASS\\s*:\\s*(true|false)\\s*$");
     private static final Pattern SCORE_PATTERN = Pattern.compile("(?im)^\\s*SCORE\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)\\s*/\\s*10\\s*$");
     private static final Pattern REASON_PATTERN = Pattern.compile("(?ims)^\\s*REASON\\s*:\\s*(.+)$");
@@ -28,17 +31,17 @@ public final class AssistantResponseReviewConsumer extends AgentConsumer {
     private final Set<String> processedRequestIds = ConcurrentHashMap.newKeySet();
     private final Map<String, CompletableFuture<ReviewReport>> reviewsByRequestId = new ConcurrentHashMap<>();
 
-    public static AssistantResponseReviewConsumer fromConfig(AppConfig config) {
-        return new AssistantResponseReviewConsumer(ChatModelFactory.create(config));
+    public static EvalConsumer fromConfig(AppConfig config) {
+        return new EvalConsumer(ChatModelFactory.create(config));
     }
 
-    public AssistantResponseReviewConsumer(ChatModel reviewModel) {
+    public EvalConsumer(ChatModel reviewModel) {
         this.reviewModel = Objects.requireNonNull(reviewModel);
     }
 
     @Override
     public String consumerId() {
-        return "assistant-response-reviewer";
+        return "assistant-response-evaluator";
     }
 
     @Override
@@ -48,6 +51,12 @@ public final class AssistantResponseReviewConsumer extends AgentConsumer {
 
     @Override
     public ConsumerEffect onAgentCompleted(AgentCompletedEvent event) {
+        LOGGER.info(
+                "Eval consumer received completion request_id={} status={} output_chars={}",
+                event.requestId(),
+                event.status(),
+                event.finalOutput() == null ? 0 : event.finalOutput().length()
+        );
         if (!event.status().isSuccess()) {
             return ConsumerEffect.done();
         }
@@ -62,10 +71,17 @@ public final class AssistantResponseReviewConsumer extends AgentConsumer {
             String rawReview = reviewModel.chat(reviewPrompt(event));
             ReviewReport report = ReviewReport.from(event.requestId(), rawReview);
             review.complete(report);
+            LOGGER.info(
+                    "Eval consumer completed request_id={} pass={} score={}",
+                    event.requestId(),
+                    report.passed(),
+                    report.score()
+            );
             return ConsumerEffect.done();
         } catch (RuntimeException exception) {
             ReviewReport failed = new ReviewReport(event.requestId(), false, 0.0, exception.getMessage(), "");
             review.complete(failed);
+            LOGGER.warn("Eval consumer failed request_id={} error={}", event.requestId(), exception.toString());
             return ConsumerEffect.fail(exception.getMessage());
         }
     }

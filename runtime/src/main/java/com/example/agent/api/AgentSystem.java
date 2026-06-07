@@ -44,16 +44,9 @@ public record AgentSystem(GatewayAgent entrypoint, List<Agent> agents) {
         return List.copyOf(definitions.values());
     }
 
-    public AgentTaskDefinition taskDefinition(String name) {
-        if (entrypoint.acceptedTask().name().equals(name)) {
-            return entrypoint.acceptedTask();
-        }
-        for (Agent agent : agents) {
-            for (AgentTaskDefinition task : agent.acceptedTasks()) {
-                if (task.name().equals(name)) {
-                    return task;
-                }
-            }
+    public GoalDefinition goalDefinition(String name) {
+        if (entrypoint.acceptedGoal().name().equals(name)) {
+            return entrypoint.acceptedGoal();
         }
         return null;
     }

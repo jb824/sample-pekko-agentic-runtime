@@ -1,8 +1,8 @@
-package com.example.agent.runtime.task;
+package com.example.agent.runtime.goal;
 
 import com.example.agent.api.AgentMemoryConfig;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTaskDefinition;
+import com.example.agent.api.GoalDefinition;
 import com.example.agent.api.GatewayAgent;
 import com.example.agent.protocol.AgentRequest;
 import com.example.agent.runtime.AgentRuntimeService;
@@ -27,10 +27,10 @@ import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-final class AgentTaskRegistryActorTest {
+final class GoalRegistryActorTest {
     private static final Duration ASK_TIMEOUT = Duration.ofSeconds(3);
     private static final AgentMemoryConfig TEST_MEMORY = AgentMemoryConfig.defaultEnabled();
-    private static final AgentTaskDefinition TEST_TASK = AgentTaskDefinition.named("test.task").maxIterations(1).build();
+    private static final GoalDefinition TEST_TASK = GoalDefinition.named("test.task").maxIterations(1).build();
     private static final AgentSystem TEST_SYSTEM = AgentSystem.builder()
             .entrypoint(GatewayAgent.named("gateway")
                     .accepts(TEST_TASK)
@@ -49,8 +49,8 @@ final class AgentTaskRegistryActorTest {
     @Test
     void expiresCompletedTasksAfterRetentionWindow() {
         MutableClock clock = new MutableClock();
-        ActorRef<AgentTaskRegistryActor.Command> registry = system.systemActorOf(
-                AgentTaskRegistryActor.create(
+        ActorRef<GoalRegistryActor.Command> registry = system.systemActorOf(
+                GoalRegistryActor.create(
                         completedRuntimeService(),
                         Duration.ofSeconds(5),
                         10,
@@ -61,19 +61,19 @@ final class AgentTaskRegistryActorTest {
         );
 
         startTask(registry, "task-expiry");
-        assertEquals(AgentTaskStatus.COMPLETED, awaitState(registry, "task-expiry").status());
+        assertEquals(GoalStatus.COMPLETED, awaitState(registry, "task-expiry").status());
 
         clock.advance(Duration.ofSeconds(6));
 
-        AgentTaskState expired = getTask(registry, "task-expiry");
-        assertEquals(AgentTaskStatus.NOT_FOUND, expired.status());
+        GoalState expired = getTask(registry, "task-expiry");
+        assertEquals(GoalStatus.NOT_FOUND, expired.status());
     }
 
     @Test
     void trimsOldestCompletedTasksWhenRetentionLimitIsExceeded() {
         MutableClock clock = new MutableClock();
-        ActorRef<AgentTaskRegistryActor.Command> registry = system.systemActorOf(
-                AgentTaskRegistryActor.create(
+        ActorRef<GoalRegistryActor.Command> registry = system.systemActorOf(
+                GoalRegistryActor.create(
                         completedRuntimeService(),
                         Duration.ofHours(1),
                         2,
@@ -84,19 +84,19 @@ final class AgentTaskRegistryActorTest {
         );
 
         startTask(registry, "task-1");
-        assertEquals(AgentTaskStatus.COMPLETED, awaitState(registry, "task-1").status());
+        assertEquals(GoalStatus.COMPLETED, awaitState(registry, "task-1").status());
         clock.advance(Duration.ofSeconds(1));
 
         startTask(registry, "task-2");
-        assertEquals(AgentTaskStatus.COMPLETED, awaitState(registry, "task-2").status());
+        assertEquals(GoalStatus.COMPLETED, awaitState(registry, "task-2").status());
         clock.advance(Duration.ofSeconds(1));
 
         startTask(registry, "task-3");
-        assertEquals(AgentTaskStatus.COMPLETED, awaitState(registry, "task-3").status());
+        assertEquals(GoalStatus.COMPLETED, awaitState(registry, "task-3").status());
 
-        assertEquals(AgentTaskStatus.NOT_FOUND, getTask(registry, "task-1").status());
-        assertEquals(AgentTaskStatus.COMPLETED, getTask(registry, "task-2").status());
-        assertEquals(AgentTaskStatus.COMPLETED, getTask(registry, "task-3").status());
+        assertEquals(GoalStatus.NOT_FOUND, getTask(registry, "task-1").status());
+        assertEquals(GoalStatus.COMPLETED, getTask(registry, "task-2").status());
+        assertEquals(GoalStatus.COMPLETED, getTask(registry, "task-3").status());
     }
 
     private AgentRuntimeService completedRuntimeService() {
@@ -118,35 +118,35 @@ final class AgentTaskRegistryActorTest {
         };
     }
 
-    private void startTask(ActorRef<AgentTaskRegistryActor.Command> registry, String taskId) {
-        AskPattern.<AgentTaskRegistryActor.Command, AgentTaskState>ask(
+    private void startTask(ActorRef<GoalRegistryActor.Command> registry, String goalId) {
+        AskPattern.<GoalRegistryActor.Command, GoalState>ask(
                 registry,
-                replyTo -> new AgentTaskRegistryActor.StartTask(taskId, "input", Duration.ofSeconds(10), TEST_SYSTEM, replyTo),
+                replyTo -> new GoalRegistryActor.StartGoal(goalId, "input", Duration.ofSeconds(10), TEST_SYSTEM, replyTo),
                 ASK_TIMEOUT,
                 system.scheduler()
         ).toCompletableFuture().join();
     }
 
-    private AgentTaskState getTask(ActorRef<AgentTaskRegistryActor.Command> registry, String taskId) {
-        return AskPattern.<AgentTaskRegistryActor.Command, AgentTaskState>ask(
+    private GoalState getTask(ActorRef<GoalRegistryActor.Command> registry, String goalId) {
+        return AskPattern.<GoalRegistryActor.Command, GoalState>ask(
                 registry,
-                replyTo -> new AgentTaskRegistryActor.GetTask(taskId, replyTo),
+                replyTo -> new GoalRegistryActor.GetGoal(goalId, replyTo),
                 ASK_TIMEOUT,
                 system.scheduler()
         ).toCompletableFuture().join();
     }
 
-    private AgentTaskState awaitState(ActorRef<AgentTaskRegistryActor.Command> registry, String taskId) {
-        AgentTaskState state = getTask(registry, taskId);
+    private GoalState awaitState(ActorRef<GoalRegistryActor.Command> registry, String goalId) {
+        GoalState state = getTask(registry, goalId);
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (state.status() == AgentTaskStatus.RUNNING && System.nanoTime() < deadline) {
+        while (state.status() == GoalStatus.RUNNING && System.nanoTime() < deadline) {
             try {
                 Thread.sleep(10L);
             } catch (InterruptedException interruptedException) {
                 Thread.currentThread().interrupt();
                 break;
             }
-            state = getTask(registry, taskId);
+            state = getTask(registry, goalId);
         }
         return state;
     }

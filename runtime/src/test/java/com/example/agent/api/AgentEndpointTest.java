@@ -16,12 +16,12 @@ class AgentEndpointTest {
         assertEquals("/v1/assistant", endpoint.path());
         assertEquals(AgentEndpoint.Mode.ASYNC, endpoint.mode());
         assertEquals(workflow, endpoint.workflow());
-        assertEquals("hello", endpoint.taskFor("hello").instructions());
+        assertEquals("hello", endpoint.goalFor("hello").instructions());
     }
 
     private static AgentWorkflow workflow() {
-        AgentTaskDefinition task = AgentTaskDefinition.named("agent.request").build();
-        Agent agent = Agent.named("assistant").accepts(task).build();
+        GoalDefinition task = GoalDefinition.named("agent.request").build();
+        Agent agent = Agent.named("assistant").build();
         GatewayAgent gateway = GatewayAgent.named("assistant-gateway")
                 .accepts(task)
                 .delegatesTo(agent)
@@ -34,7 +34,7 @@ class AgentEndpointTest {
             }
 
             @Override
-            public AgentTaskDefinition taskDefinition() {
+            public GoalDefinition goalDefinition() {
                 return task;
             }
 

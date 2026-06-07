@@ -5,9 +5,9 @@ import com.example.agent.api.AgentMemoryConfig;
 import com.example.agent.api.AgentRunContext;
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTaskRequest;
+import com.example.agent.api.GoalRequest;
 import com.example.agent.api.GatewayAgent;
-import com.example.agent.api.Task;
+import com.example.agent.api.Goal;
 import dev.langchain4j.model.chat.ChatModel;
 import org.junit.jupiter.api.Test;
 
@@ -31,8 +31,8 @@ final class AgentMemoryRuntimeTest {
                 .telemetryEnabled(false)
                 .build()) {
             AgentSystem system = singleAgentSystem(AgentMemoryConfig.recentEvents(10));
-            AgentTaskRequest first = AgentTaskRequest.of("agent.request").instructions("remember alpha").build();
-            AgentTaskRequest second = AgentTaskRequest.of("agent.request").instructions("use prior memory").build();
+            GoalRequest first = GoalRequest.of("agent.request").instructions("remember alpha").build();
+            GoalRequest second = GoalRequest.of("agent.request").instructions("use prior memory").build();
 
             runtime.run(AgentRunContext.tenant("tenant-a"), "request-1", system, first, Duration.ofSeconds(5))
                     .toCompletableFuture()
@@ -64,11 +64,11 @@ final class AgentMemoryRuntimeTest {
             AgentSystem system = singleAgentSystem(AgentMemoryConfig.recentEvents(10));
 
             runtime.run(AgentRunContext.tenant("tenant-a"), "request-1", system,
-                            AgentTaskRequest.of("agent.request").instructions("tenant-a secret").build(), Duration.ofSeconds(5))
+                            GoalRequest.of("agent.request").instructions("tenant-a secret").build(), Duration.ofSeconds(5))
                     .toCompletableFuture()
                     .join();
             runtime.run(AgentRunContext.tenant("tenant-b"), "request-2", system,
-                            AgentTaskRequest.of("agent.request").instructions("tenant-b request").build(), Duration.ofSeconds(5))
+                            GoalRequest.of("agent.request").instructions("tenant-b request").build(), Duration.ofSeconds(5))
                     .toCompletableFuture()
                     .join();
         }
@@ -88,7 +88,7 @@ final class AgentMemoryRuntimeTest {
                 .memory(memory)
                 .build();
         GatewayAgent gateway = GatewayAgent.named("gateway")
-                .accepts(Task.of("agent.request").maxIterations(1).build())
+                .accepts(Goal.of("agent.request").maxIterations(1).build())
                 .delegatesTo(assistant)
                 .memory(memory)
                 .build();

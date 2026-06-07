@@ -4,14 +4,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-public record AgentTaskDefinition(
+public record GoalDefinition(
         String name,
         String description,
         String instructionsTemplate,
         int maxIterations,
-        List<AgentTaskRule> rules
+        List<GoalRule> rules
 ) {
-    public AgentTaskDefinition {
+    public GoalDefinition {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("task name must not be blank");
         }
@@ -25,20 +25,20 @@ public record AgentTaskDefinition(
         return new Builder(name);
     }
 
-    public AgentTaskRequest request(String input) {
+    public GoalRequest request(String input) {
         String value = input == null ? "" : input;
         String rendered = instructionsTemplate.replace("{{input}}", value);
-        return AgentTaskRequest.of(this).instructions(rendered).build();
+        return GoalRequest.of(this).instructions(rendered).build();
     }
 
-    public AgentTaskRuleResult validate(AgentTaskRequest request) {
-        for (AgentTaskRule rule : rules) {
-            AgentTaskRuleResult result = rule.validate(request);
+    public GoalRuleResult validate(GoalRequest request) {
+        for (GoalRule rule : rules) {
+            GoalRuleResult result = rule.validate(request);
             if (!result.valid()) {
                 return result;
             }
         }
-        return AgentTaskRuleResult.ok();
+        return GoalRuleResult.ok();
     }
 
     public static final class Builder {
@@ -46,7 +46,7 @@ public record AgentTaskDefinition(
         private String description = "";
         private String instructionsTemplate = "{{input}}";
         private int maxIterations = 4;
-        private final List<AgentTaskRule> rules = new ArrayList<>();
+        private final List<GoalRule> rules = new ArrayList<>();
 
         private Builder(String name) {
             this.name = name;
@@ -67,13 +67,13 @@ public record AgentTaskDefinition(
             return this;
         }
 
-        public Builder rule(AgentTaskRule rule) {
+        public Builder rule(GoalRule rule) {
             this.rules.add(Objects.requireNonNull(rule));
             return this;
         }
 
-        public AgentTaskDefinition build() {
-            return new AgentTaskDefinition(name, description, instructionsTemplate, maxIterations, rules);
+        public GoalDefinition build() {
+            return new GoalDefinition(name, description, instructionsTemplate, maxIterations, rules);
         }
     }
 }

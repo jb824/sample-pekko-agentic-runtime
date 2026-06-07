@@ -2,8 +2,8 @@ package com.example.agent.api;
 
 import com.example.agent.runtime.AgentResult;
 
-public record AgentTaskState(
-        String taskId,
+public record GoalState(
+        String goalId,
         String status,
         AgentResult result,
         String error

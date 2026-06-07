@@ -2,7 +2,7 @@ package com.example.agent.adapter.grpc;
 
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTaskRequest;
+import com.example.agent.api.GoalRequest;
 import com.example.agent.runtime.AgentResult;
 import com.example.agent.runtime.grpc.AgentRuntimeGrpc;
 import com.example.agent.runtime.grpc.Error;
@@ -33,7 +33,7 @@ public final class AgentRuntimeGrpcService extends AgentRuntimeGrpc.AgentRuntime
         runtime.run(
                         request.getRequestId(),
                         defaultSystem,
-                        AgentTaskRequest.of(defaultSystem.entrypoint().acceptedTask().name()).instructions(request.getInput()).build(),
+                        GoalRequest.of(defaultSystem.entrypoint().acceptedGoal().name()).instructions(request.getInput()).build(),
                         timeout
                 )
                 .whenComplete((result, failure) -> {

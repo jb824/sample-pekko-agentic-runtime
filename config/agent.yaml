@@ -1,6 +1,8 @@
 llm:
   backend: vllm
   temperature: 0.2
+  context_window_tokens: 8192
+  context_safety_tokens: 512
   ollama:
     base_url: http://localhost:11434
     model: granite4:3b
@@ -9,7 +11,7 @@ llm:
     model: ibm-granite/granite-4.1-3b
     api_key: EMPTY
     api_type: chat
-    max_tokens: 1024
+    max_tokens: 2048
     system_prompt: You are a careful assistant. Follow the user request exactly. Return complete, concise answers. Do not invent product names.
     tokenizer_path: ""
     grpc:

@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class AssistantResponseReviewConsumerTest {
     @Test
     void reviewsSuccessfulAssistantResponseAgainstOriginalQuestion() {
-        AssistantResponseReviewConsumer consumer = new AssistantResponseReviewConsumer(new FixedReviewModel());
+        EvalConsumer consumer = new EvalConsumer(new FixedReviewModel());
 
         ConsumerEffect effect = consumer.onAgentCompleted(new AgentCompletedEvent(
                 "request-1",
@@ -31,7 +31,7 @@ final class AssistantResponseReviewConsumerTest {
         ));
 
         assertTrue(effect.isDone());
-        AssistantResponseReviewConsumer.ReviewReport report = consumer.awaitReview("request-1", Duration.ofSeconds(1)).orElseThrow();
+        EvalConsumer.ReviewReport report = consumer.awaitReview("request-1", Duration.ofSeconds(1)).orElseThrow();
         assertTrue(report.passed());
         assertEquals(8.5, report.score());
         assertTrue(report.reason().contains("answers the question"));
@@ -39,7 +39,7 @@ final class AssistantResponseReviewConsumerTest {
 
     @Test
     void skipsFailedAgentResults() {
-        AssistantResponseReviewConsumer consumer = new AssistantResponseReviewConsumer(new FixedReviewModel());
+        EvalConsumer consumer = new EvalConsumer(new FixedReviewModel());
 
         ConsumerEffect effect = consumer.onAgentCompleted(new AgentCompletedEvent(
                 "request-2",

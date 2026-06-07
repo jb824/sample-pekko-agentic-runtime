@@ -31,7 +31,7 @@ public final class AgentRuntimeClient implements AutoCloseable {
     }
 
     public CompletionStage<AgentResult> run(String requestId, AgentWorkflow workflow, String input, Duration timeout) {
-        return runtime.run(requestId, workflow.system(), workflow.task(input), timeout);
+        return runtime.run(requestId, workflow.system(), workflow.goal(input), timeout);
     }
 
     public CompletionStage<AgentResult> run(AgentRunContext context, AgentWorkflow workflow, String input) {
@@ -39,18 +39,18 @@ public final class AgentRuntimeClient implements AutoCloseable {
     }
 
     public CompletionStage<AgentResult> run(AgentRunContext context, String requestId, AgentWorkflow workflow, String input, Duration timeout) {
-        return runtime.run(context, requestId, workflow.system(), workflow.task(input), timeout);
+        return runtime.run(context, requestId, workflow.system(), workflow.goal(input), timeout);
     }
 
-    public AgentTaskRun start(AgentWorkflow workflow, String input) {
+    public GoalRun start(AgentWorkflow workflow, String input) {
         return start(UUID.randomUUID().toString(), workflow, input, workflow.timeout());
     }
 
-    public AgentTaskRun start(String instanceId, AgentWorkflow workflow, String input, Duration timeout) {
-        String taskId = runtime.componentClient()
+    public GoalRun start(String instanceId, AgentWorkflow workflow, String input, Duration timeout) {
+        String goalId = runtime.componentClient()
                 .forGatewayAgent(workflow.system(), instanceId)
-                .runSingleTask(workflow.task(input), timeout);
-        return new AgentTaskRun(runtime.componentClient(), taskId);
+                .runSingleGoal(workflow.goal(input), timeout);
+        return new GoalRun(runtime.componentClient(), goalId);
     }
 
     @Override

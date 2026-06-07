@@ -10,14 +10,21 @@ public record GatewayAgent(
         List<String> tools,
         List<AgentToolDefinition> toolDefinitions,
         AgentMemoryConfig memory,
-        AgentTaskDefinition acceptedTask,
+        GoalDefinition acceptedGoal,
+        OrchestrationMode orchestrationMode,
         List<String> delegates
 ) {
     public GatewayAgent {
         tools = tools == null ? List.of() : List.copyOf(tools);
         toolDefinitions = toolDefinitions == null ? List.of() : List.copyOf(toolDefinitions);
         memory = memory == null ? AgentMemoryConfig.defaultEnabled() : memory;
+        orchestrationMode = orchestrationMode == null ? OrchestrationMode.WORKFLOW_DRIVEN : orchestrationMode;
         delegates = delegates == null ? List.of() : List.copyOf(delegates);
+    }
+
+    public enum OrchestrationMode {
+        WORKFLOW_DRIVEN,
+        MODEL_DRIVEN
     }
 
     public static Builder named(String name) {
@@ -30,7 +37,8 @@ public record GatewayAgent(
         private List<String> tools = List.of();
         private List<AgentToolDefinition> toolDefinitions = List.of();
         private AgentMemoryConfig memory = AgentMemoryConfig.defaultEnabled();
-        private AgentTaskDefinition acceptedTask;
+        private GoalDefinition acceptedGoal;
+        private OrchestrationMode orchestrationMode = OrchestrationMode.WORKFLOW_DRIVEN;
         private final List<String> delegates = new ArrayList<>();
 
         private Builder(String name) {
@@ -42,15 +50,15 @@ public record GatewayAgent(
             return this;
         }
 
-        public Builder accepts(Task task) {
-            this.acceptedTask = AgentTaskDefinition.named(task.type())
-                    .maxIterations(task.maxIterations())
+        public Builder accepts(Goal goal) {
+            this.acceptedGoal = GoalDefinition.named(goal.type())
+                    .maxIterations(goal.maxIterations())
                     .build();
             return this;
         }
 
-        public Builder accepts(AgentTaskDefinition task) {
-            this.acceptedTask = task;
+        public Builder accepts(GoalDefinition goal) {
+            this.acceptedGoal = goal;
             return this;
         }
 
@@ -62,6 +70,25 @@ public record GatewayAgent(
                         .filter(name -> name != null && !name.isBlank())
                         .forEach(delegates::add);
             }
+            return this;
+        }
+
+        public Builder delegatesTo(String... agentNames) {
+            if (agentNames != null) {
+                Arrays.stream(agentNames)
+                        .filter(name -> name != null && !name.isBlank())
+                        .forEach(delegates::add);
+            }
+            return this;
+        }
+
+        public Builder workflowDriven() {
+            this.orchestrationMode = OrchestrationMode.WORKFLOW_DRIVEN;
+            return this;
+        }
+
+        public Builder modelDriven() {
+            this.orchestrationMode = OrchestrationMode.MODEL_DRIVEN;
             return this;
         }
 
@@ -83,16 +110,24 @@ public record GatewayAgent(
             return this;
         }
 
+        public Builder usesTools(Object source, Object... otherSources) {
+            this.toolDefinitions = FunctionTools.from(source, otherSources);
+            this.tools = this.toolDefinitions.stream()
+                    .map(AgentToolDefinition::name)
+                    .toList();
+            return this;
+        }
+
         public Builder memory(AgentMemoryConfig memory) {
             this.memory = memory == null ? AgentMemoryConfig.defaultEnabled() : memory;
             return this;
         }
 
         public GatewayAgent build() {
-            if (acceptedTask == null) {
-                throw new IllegalStateException("gateway agent requires an accepted task");
+            if (acceptedGoal == null) {
+                throw new IllegalStateException("gateway agent requires an accepted goal");
             }
-            return new GatewayAgent(name, instructions, tools, toolDefinitions, memory, acceptedTask, delegates);
+            return new GatewayAgent(name, instructions, tools, toolDefinitions, memory, acceptedGoal, orchestrationMode, delegates);
         }
     }
 }

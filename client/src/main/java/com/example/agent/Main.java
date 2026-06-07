@@ -16,7 +16,7 @@ public final class Main {
 
     public static void main(String[] args) {
         AppConfig config = AppConfig.fromEnvironment();
-        AssistantWorkflow workflow = new AssistantWorkflow();
+        ThreatVulnerabilityTrackerWorkflow workflow = new ThreatVulnerabilityTrackerWorkflow();
         if (Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_HTTP", "false"))) {
             runHttp(config, workflow);
             return;
@@ -62,7 +62,7 @@ public final class Main {
         }
     }
 
-    private static void runHttp(AppConfig config, AssistantWorkflow workflow) {
+    private static void runHttp(AppConfig config, ThreatVulnerabilityTrackerWorkflow workflow) {
         int port = Integer.parseInt(System.getenv().getOrDefault("AGENT_HTTP_PORT", "8080"));
         AgentRuntime.Builder runtimeBuilder = AgentRuntime.builder().config(config);
         if (evalEnabled()) {
@@ -72,7 +72,7 @@ public final class Main {
         AgentHttpServer server = AgentHttpServer.builder()
                 .runtime(runtime)
                 .port(port)
-                .endpoint(new AssistantHttpEndpoint(runtime, workflow))
+                .endpoint(new ThreatVulnerabilityTrackerEndpoint(runtime, workflow))
                 .build();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             server.close();

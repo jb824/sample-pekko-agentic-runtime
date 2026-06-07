@@ -11,35 +11,35 @@ public final class AgentEndpoint {
 
     private final String path;
     private final AgentWorkflow workflow;
-    private final Function<String, AgentTaskRequest> taskFactory;
+    private final Function<String, GoalRequest> goalFactory;
     private final Mode mode;
 
     private AgentEndpoint(
             String path,
             AgentWorkflow workflow,
-            Function<String, AgentTaskRequest> taskFactory,
+            Function<String, GoalRequest> goalFactory,
             Mode mode
     ) {
         this.path = normalizePath(path);
         this.workflow = Objects.requireNonNull(workflow);
-        this.taskFactory = Objects.requireNonNull(taskFactory);
+        this.goalFactory = Objects.requireNonNull(goalFactory);
         this.mode = Objects.requireNonNull(mode);
     }
 
     public static AgentEndpoint sync(String path, AgentWorkflow workflow) {
-        return sync(path, workflow, workflow::task);
+        return sync(path, workflow, workflow::goal);
     }
 
-    public static AgentEndpoint sync(String path, AgentWorkflow workflow, Function<String, AgentTaskRequest> taskFactory) {
-        return new AgentEndpoint(path, workflow, taskFactory, Mode.SYNC);
+    public static AgentEndpoint sync(String path, AgentWorkflow workflow, Function<String, GoalRequest> goalFactory) {
+        return new AgentEndpoint(path, workflow, goalFactory, Mode.SYNC);
     }
 
     public static AgentEndpoint async(String path, AgentWorkflow workflow) {
-        return async(path, workflow, workflow::task);
+        return async(path, workflow, workflow::goal);
     }
 
-    public static AgentEndpoint async(String path, AgentWorkflow workflow, Function<String, AgentTaskRequest> taskFactory) {
-        return new AgentEndpoint(path, workflow, taskFactory, Mode.ASYNC);
+    public static AgentEndpoint async(String path, AgentWorkflow workflow, Function<String, GoalRequest> goalFactory) {
+        return new AgentEndpoint(path, workflow, goalFactory, Mode.ASYNC);
     }
 
     public String path() {
@@ -50,8 +50,8 @@ public final class AgentEndpoint {
         return workflow;
     }
 
-    public AgentTaskRequest taskFor(String input) {
-        return taskFactory.apply(input);
+    public GoalRequest goalFor(String input) {
+        return goalFactory.apply(input);
     }
 
     public Mode mode() {

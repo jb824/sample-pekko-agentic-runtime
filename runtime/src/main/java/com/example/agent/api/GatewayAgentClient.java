@@ -1,7 +1,7 @@
 package com.example.agent.api;
 
-import com.example.agent.runtime.task.AgentTaskState;
-import com.example.agent.runtime.task.AgentTaskRegistryActor;
+import com.example.agent.runtime.goal.GoalState;
+import com.example.agent.runtime.goal.GoalRegistryActor;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Scheduler;
 import org.apache.pekko.actor.typed.javadsl.AskPattern;
@@ -12,51 +12,51 @@ import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 
 public final class GatewayAgentClient {
-    private final ActorRef<AgentTaskRegistryActor.Command> taskRegistry;
+    private final ActorRef<GoalRegistryActor.Command> goalRegistry;
     private final Scheduler scheduler;
     private final Duration defaultTimeout;
     private final AgentSystem system;
     private final String instanceId;
 
     GatewayAgentClient(
-            ActorRef<AgentTaskRegistryActor.Command> taskRegistry,
+            ActorRef<GoalRegistryActor.Command> goalRegistry,
             Scheduler scheduler,
             Duration defaultTimeout,
             AgentSystem system,
             String instanceId
     ) {
-        this.taskRegistry = Objects.requireNonNull(taskRegistry);
+        this.goalRegistry = Objects.requireNonNull(goalRegistry);
         this.scheduler = Objects.requireNonNull(scheduler);
         this.defaultTimeout = Objects.requireNonNull(defaultTimeout);
         this.system = Objects.requireNonNull(system);
         this.instanceId = Objects.requireNonNull(instanceId);
     }
 
-    public String runSingleTask(AgentTaskRequest task) {
-        return runSingleTask(task, defaultTimeout);
+    public String runSingleGoal(GoalRequest goal) {
+        return runSingleGoal(goal, defaultTimeout);
     }
 
-    public String runSingleTask(AgentTaskRequest task, Duration timeout) {
-        return runSingleTaskAsync(task, timeout).toCompletableFuture().join();
+    public String runSingleGoal(GoalRequest goal, Duration timeout) {
+        return runSingleGoalAsync(goal, timeout).toCompletableFuture().join();
     }
 
-    public CompletionStage<String> runSingleTaskAsync(AgentTaskRequest task) {
-        return runSingleTaskAsync(task, defaultTimeout);
+    public CompletionStage<String> runSingleGoalAsync(GoalRequest goal) {
+        return runSingleGoalAsync(goal, defaultTimeout);
     }
 
-    public CompletionStage<String> runSingleTaskAsync(AgentTaskRequest task, Duration timeout) {
-        String taskId = instanceId + "-" + UUID.randomUUID();
-        return AskPattern.<AgentTaskRegistryActor.Command, AgentTaskState>ask(
-                taskRegistry,
-                replyTo -> new AgentTaskRegistryActor.StartTask(
-                        taskId,
-                        task.instructions(),
+    public CompletionStage<String> runSingleGoalAsync(GoalRequest goal, Duration timeout) {
+        String goalId = instanceId + "-" + UUID.randomUUID();
+        return AskPattern.<GoalRegistryActor.Command, GoalState>ask(
+                goalRegistry,
+                replyTo -> new GoalRegistryActor.StartGoal(
+                        goalId,
+                        goal.instructions(),
                         timeout,
                         system,
                         replyTo
                 ),
                 Duration.ofSeconds(5),
                 scheduler
-        ).thenApply(state -> state.taskId());
+        ).thenApply(state -> state.goalId());
     }
 }

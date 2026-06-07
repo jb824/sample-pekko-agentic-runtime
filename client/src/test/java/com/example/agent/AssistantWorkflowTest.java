@@ -28,7 +28,9 @@ class AssistantWorkflowTest {
                         "getCurrentTimeWithZoneId",
                         "getCurrentDateTimeWithZoneId",
                         "getIanaZoneIds",
-                        "calculate"
+                        "calculate",
+                        "web.search",
+                        "web.fetch"
                 ),
                 Set.copyOf(workflow.system().agents().getFirst().tools())
         );

@@ -1,0 +1,8 @@
+[
+  {
+    "tenantId": "default",
+    "collection": "customer_profiles",
+    "query": "What is customer C001 interested in?",
+    "relevantIds": ["default:C001"]
+  }
+]

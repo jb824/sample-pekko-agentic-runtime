@@ -1,6 +1,6 @@
 package com.example.agent.runtime.checkpoint;
 
-public enum TaskExecutionStatus {
+public enum GoalExecutionStatus {
     PENDING,
     RUNNING,
     COMPLETED,

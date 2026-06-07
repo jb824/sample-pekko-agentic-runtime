@@ -2,8 +2,8 @@ package com.example.agent.api;
 
 import java.util.Map;
 
-public record AgentTaskRequest(String name, String instructions, Map<String, String> metadata) {
-    public AgentTaskRequest {
+public record GoalRequest(String name, String instructions, Map<String, String> metadata) {
+    public GoalRequest {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("task name must not be blank");
         }
@@ -19,7 +19,7 @@ public record AgentTaskRequest(String name, String instructions, Map<String, Str
         return new Builder(name);
     }
 
-    public static Builder of(AgentTaskDefinition definition) {
+    public static Builder of(GoalDefinition definition) {
         return new Builder(definition.name());
     }
 
@@ -42,8 +42,8 @@ public record AgentTaskRequest(String name, String instructions, Map<String, Str
             return this;
         }
 
-        public AgentTaskRequest build() {
-            return new AgentTaskRequest(name, instructions, metadata);
+        public GoalRequest build() {
+            return new GoalRequest(name, instructions, metadata);
         }
     }
 }

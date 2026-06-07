@@ -3,7 +3,7 @@ package com.example.agent.gateway;
 import com.example.agent.api.Agent;
 import com.example.agent.api.AgentMemoryConfig;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTaskDefinition;
+import com.example.agent.api.GoalDefinition;
 import com.example.agent.api.GatewayAgent;
 import com.example.agent.llm.LlmProtocol;
 import com.example.agent.protocol.AgentRequest;
@@ -29,10 +29,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 final class GatewayActorTest {
     private static final Duration ASK_TIMEOUT = Duration.ofSeconds(3);
     private static final AgentMemoryConfig DISABLED_MEMORY = AgentMemoryConfig.disabled();
-    private static final AgentTaskDefinition TASK = AgentTaskDefinition.named("agent.request").maxIterations(2).build();
+    private static final GoalDefinition TASK = GoalDefinition.named("agent.request").maxIterations(2).build();
     private static final Agent ASSISTANT = Agent.named("assistant")
             .instructedBy("Answer.")
-            .accepts(TASK)
             .memory(DISABLED_MEMORY)
             .build();
     private static final AgentSystem TEST_SYSTEM = AgentSystem.builder()

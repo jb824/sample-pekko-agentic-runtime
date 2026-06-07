@@ -5,9 +5,9 @@ import com.example.agent.api.AgentMemoryConfig;
 import com.example.agent.api.AgentRunContext;
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTaskRequest;
+import com.example.agent.api.GoalRequest;
 import com.example.agent.api.GatewayAgent;
-import com.example.agent.api.Task;
+import com.example.agent.api.Goal;
 import dev.langchain4j.model.chat.ChatModel;
 import org.junit.jupiter.api.Test;
 
@@ -38,7 +38,7 @@ final class AgentRuntimeConsumerIntegrationTest {
                             AgentRunContext.tenant("tenant-a"),
                             "request-1",
                             system(),
-                            AgentTaskRequest.of("agent.request").instructions("hello").build(),
+                            GoalRequest.of("agent.request").instructions("hello").build(),
                             Duration.ofSeconds(5)
                     )
                     .toCompletableFuture()
@@ -69,7 +69,7 @@ final class AgentRuntimeConsumerIntegrationTest {
                             AgentRunContext.tenant("tenant-a"),
                             "request-invalid",
                             system(),
-                            AgentTaskRequest.of("unknown.task").instructions("bad").build(),
+                            GoalRequest.of("unknown.task").instructions("bad").build(),
                             Duration.ofSeconds(5)
                     )
                     .toCompletableFuture()
@@ -96,7 +96,7 @@ final class AgentRuntimeConsumerIntegrationTest {
                     AgentRunContext.tenant("tenant-a"),
                     "request-invalid-ack",
                     system(),
-                    AgentTaskRequest.of("unknown.task").instructions("bad").build(),
+                    GoalRequest.of("unknown.task").instructions("bad").build(),
                     Duration.ofSeconds(5)
             ).toCompletableFuture();
 
@@ -114,7 +114,7 @@ final class AgentRuntimeConsumerIntegrationTest {
                 .memory(AgentMemoryConfig.disabled())
                 .build();
         GatewayAgent gateway = GatewayAgent.named("gateway")
-                .accepts(Task.of("agent.request").maxIterations(1).build())
+                .accepts(Goal.of("agent.request").maxIterations(1).build())
                 .delegatesTo(assistant)
                 .memory(AgentMemoryConfig.disabled())
                 .build();

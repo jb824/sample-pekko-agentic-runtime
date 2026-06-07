@@ -26,30 +26,29 @@ import com.example.agent.api.AgentMemoryConfig;
 import com.example.agent.api.AgentRunContext;
 import com.example.agent.api.AgentRuntimeClient;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTaskDefinition;
-import com.example.agent.api.AgentTaskRule;
-import com.example.agent.api.AgentToolDefinition;
-import com.example.agent.api.AgentToolResult;
+import com.example.agent.api.Tool;
+import com.example.agent.api.GoalDefinition;
+import com.example.agent.api.GoalRule;
 import com.example.agent.api.AgentWorkflow;
 import com.example.agent.api.GatewayAgent;
 
-import java.util.concurrent.CompletableFuture;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 public final class AssistantWorkflow implements AgentWorkflow {
-    private static final AgentTaskDefinition ANSWER_QUESTION = AgentTaskDefinition.named("answer.question")
+    private static final GoalDefinition ANSWER_QUESTION = GoalDefinition.named("answer.question")
             .describedAs("Answer a user's question directly and cite tool results when available.")
             .template("Answer the following user question:\n{{input}}")
             .maxIterations(2)
-            .rule(AgentTaskRule.nonEmptyInstructions())
+            .rule(GoalRule.nonEmptyInstructions())
             .build();
 
     private final AgentSystem system;
 
-    public AssistantWorkflow(AgentToolDefinition timeNow) {
+    public AssistantWorkflow() {
         Agent assistant = Agent.named("assistant")
                 .instructedBy("Answer directly and use available tools when useful.")
-                .accepts(ANSWER_QUESTION)
-                .uses(timeNow)
+                .usesTools(this)
                 .memory(AgentMemoryConfig.recentEvents(20))
                 .build();
 
@@ -65,42 +64,40 @@ public final class AssistantWorkflow implements AgentWorkflow {
         return system;
     }
 
-    public AgentTaskDefinition taskDefinition() {
+    public GoalDefinition goalDefinition() {
         return ANSWER_QUESTION;
     }
 
     public java.time.Duration timeout() {
         return java.time.Duration.ofSeconds(60);
     }
-}
 
-AgentToolDefinition timeNow = AgentToolDefinition.named("time.now")
-        .describedAs("Returns the current UTC time.")
-        .handledBy(request -> CompletableFuture.completedFuture(
-                AgentToolResult.success(java.time.Instant.now().toString())
-        ))
-        .build();
+    @Tool(description = "Return current date in yyyy-MM-dd format")
+    private String getCurrentDate() {
+        return LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
+    }
+}
 
 try (AgentRuntimeClient client = AgentRuntimeClient.create()) {
     var result = client.run(
             AgentRunContext.tenant("default"),
-            new AssistantWorkflow(timeNow),
-            "What time is it?"
+            new AssistantWorkflow(),
+            "What date is it?"
     ).toCompletableFuture().join();
 
     System.out.println(result.output());
 }
 ```
 
-For lower-level control, build the `AgentSystem` and `AgentTask` directly:
+For lower-level control, build the `AgentSystem` and `Goal` directly:
 
 ```java
 import com.example.agent.api.Agent;
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTask;
+import com.example.agent.api.Goal;
+import com.example.agent.api.GoalRequest;
 import com.example.agent.api.GatewayAgent;
-import com.example.agent.api.Task;
 
 Agent researcher = Agent.named("researcher")
         .instructedBy("Answer carefully and cite tool results when available.")
@@ -108,7 +105,7 @@ Agent researcher = Agent.named("researcher")
         .build();
 
 GatewayAgent gateway = GatewayAgent.named("gateway")
-        .accepts(Task.of("research.request").maxIterations(1).build())
+        .accepts(Goal.of("research.request").maxIterations(1).build())
         .delegatesTo(researcher)
         .instructedBy("Delegate to the researcher and return the final answer.")
         .build();
@@ -121,7 +118,7 @@ AgentSystem system = AgentSystem.builder()
 try (AgentRuntime runtime = AgentRuntime.builder().build()) {
     var result = runtime.run(
             system,
-            AgentTask.of("research.request")
+            GoalRequest.of("research.request")
                     .instructions("Summarize the latest CDC flu guidance for clinicians.")
                     .build()
     ).toCompletableFuture().join();
@@ -138,15 +135,15 @@ Design intent:
 
 ## Embedded Runtime API
 
-The `runtime` module is the library target (`com.example.agent:pekko-agent-runtime`). It contains agent execution, task lifecycle, tools, LLM orchestration, and the small Pekko HTTP bootstrap API under `com.example.agent.http`, so clients only need one runtime dependency.
+The `runtime` module is the library target (`com.example.agent:pekko-agent-runtime`). It contains agent execution, goal lifecycle, tools, LLM orchestration, and the small Pekko HTTP bootstrap API under `com.example.agent.http`, so clients only need one runtime dependency.
 
 ```java
 import com.example.agent.api.Agent;
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTask;
+import com.example.agent.api.Goal;
+import com.example.agent.api.GoalRequest;
 import com.example.agent.api.GatewayAgent;
-import com.example.agent.api.Task;
 
 Agent weather = Agent.named("weather")
         .instructedBy("Answer weather questions using weather tools.")
@@ -158,7 +155,7 @@ Agent activity = Agent.named("activity")
         .build();
 
 GatewayAgent planner = GatewayAgent.named("travel-planner")
-        .accepts(Task.of("travel.request").maxIterations(5).build())
+        .accepts(Goal.of("travel.request").maxIterations(5).build())
         .delegatesTo(weather, activity)
         .instructedBy("Coordinate the team and return a concise itinerary.")
         .build();
@@ -169,16 +166,16 @@ AgentSystem system = AgentSystem.builder()
         .build();
 
 try (AgentRuntime runtime = AgentRuntime.builder().build()) {
-    String taskId = runtime.componentClient()
+    String goalId = runtime.componentClient()
         .forGatewayAgent(system, java.util.UUID.randomUUID().toString())
-        .runSingleTaskAsync(AgentTask.of("activity.request")
+        .runSingleGoalAsync(GoalRequest.of("activity.request")
                 .instructions("Plan an outdoor afternoon in Toronto tomorrow.")
                 .build())
         .toCompletableFuture()
         .join();
 
-    var task = runtime.componentClient()
-        .forTask(taskId)
+    var goal = runtime.componentClient()
+        .forGoal(goalId)
         .getAsync()
         .toCompletableFuture()
         .join();
@@ -187,8 +184,8 @@ try (AgentRuntime runtime = AgentRuntime.builder().build()) {
 
 Example HTTP endpoints in this repository:
 - `POST /v1/agents/execute` (client-designed multi-agent system)
-- `POST /v1/agents/tasks`
-- `GET /v1/agents/tasks/{taskId}`
+- `POST /v1/agents/goals`
+- `GET /v1/agents/goals/{goalId}`
 
 ## Post-Execution Consumers
 
@@ -199,7 +196,7 @@ try (AgentRuntime runtime = AgentRuntime.builder()
         .consumer(new EvaluationConsumer((input, output) ->
                 new EvaluationConsumer.EvaluationResult(true, 1.0, "")))
         .build()) {
-    runtime.run(system, AgentTask.of("agent.request").instructions("Hello").build());
+    runtime.run(system, GoalRequest.of("agent.request").instructions("Hello").build());
 }
 ```
 
@@ -286,7 +283,8 @@ import com.example.agent.api.Agent;
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
 import com.example.agent.api.GatewayAgent;
-import com.example.agent.api.Task;
+import com.example.agent.api.Goal;
+import com.example.agent.api.GoalRequest;
 import com.example.agent.http.AgentHttpServer;
 
 Agent researcher = Agent.named("researcher")
@@ -295,7 +293,7 @@ Agent researcher = Agent.named("researcher")
         .build();
 
 GatewayAgent gateway = GatewayAgent.named("gateway")
-        .accepts(Task.of("research.request").maxIterations(1).build())
+        .accepts(Goal.of("research.request").maxIterations(1).build())
         .delegatesTo(researcher)
         .instructedBy("Delegate to the researcher and return the final answer.")
         .build();
@@ -310,7 +308,7 @@ try (AgentRuntime runtime = AgentRuntime.builder().build();
              .runtime(runtime)
              .port(8080)
              .syncEndpoint("/v1/research", system, "research.request")
-             .asyncEndpoint("/v1/research/tasks", system, "research.request")
+             .asyncEndpoint("/v1/research/goals", system, "research.request")
              .build()) {
     server.start().toCompletableFuture().join();
 }
@@ -393,8 +391,8 @@ HTTP endpoints:
 
 - `GET /health`
 - `POST /v1/agents/execute`
-- `POST /v1/agents/tasks`
-- `GET /v1/agents/tasks/{taskId}`
+- `POST /v1/agents/goals`
+- `GET /v1/agents/goals/{goalId}`
 
 ## Decoupled RAG Retrieval Service
 
@@ -574,7 +572,7 @@ vllm serve ibm-granite/granite-4.1-3b \
   --gpu-memory-utilization 0.9 \  
   --max-model-len 2048 \  
   --max-num-seqs 4 \ 
-  --max_num_batched_tokens=2048 \
+  --max-num-batched-tokens=2048 \
   --quantization bitsandbytes # (optional) --grpc
 ```
 

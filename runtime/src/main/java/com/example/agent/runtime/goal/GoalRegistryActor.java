@@ -1,4 +1,4 @@
-package com.example.agent.runtime.task;
+package com.example.agent.runtime.goal;
 
 import com.example.agent.api.AgentSystem;
 import com.example.agent.protocol.AgentRequest;
@@ -20,19 +20,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-public final class AgentTaskRegistryActor extends AbstractBehavior<AgentTaskRegistryActor.Command> {
+public final class GoalRegistryActor extends AbstractBehavior<GoalRegistryActor.Command> {
     private final AgentRuntimeService runtimeService;
     private final Duration taskRetention;
     private final int maxRetainedTasks;
     private final Clock clock;
-    private final Map<String, StoredTask> tasks = new HashMap<>();
+    private final Map<String, StoredGoal> goals = new HashMap<>();
 
     public static Behavior<Command> create(
             AgentRuntimeService runtimeService,
             Duration taskRetention,
             int maxRetainedTasks
     ) {
-        return Behaviors.setup(context -> new AgentTaskRegistryActor(
+        return Behaviors.setup(context -> new GoalRegistryActor(
                 context,
                 runtimeService,
                 taskRetention,
@@ -47,7 +47,7 @@ public final class AgentTaskRegistryActor extends AbstractBehavior<AgentTaskRegi
             int maxRetainedTasks,
             Clock clock
     ) {
-        return Behaviors.setup(context -> new AgentTaskRegistryActor(
+        return Behaviors.setup(context -> new GoalRegistryActor(
                 context,
                 runtimeService,
                 taskRetention,
@@ -56,7 +56,7 @@ public final class AgentTaskRegistryActor extends AbstractBehavior<AgentTaskRegi
         ));
     }
 
-    private AgentTaskRegistryActor(
+    private GoalRegistryActor(
             ActorContext<Command> context,
             AgentRuntimeService runtimeService,
             Duration taskRetention,
@@ -71,87 +71,87 @@ public final class AgentTaskRegistryActor extends AbstractBehavior<AgentTaskRegi
         scheduleCleanup();
     }
 
-    public sealed interface Command permits StartTask, GetTask, WrappedTaskResult, CleanupExpiredTasks {
+    public sealed interface Command permits StartGoal, GetGoal, WrappedGoalResult, CleanupExpiredGoals {
     }
 
-    public record StartTask(
-            String taskId,
+    public record StartGoal(
+            String goalId,
             String input,
             Duration timeout,
             AgentSystem system,
-            ActorRef<AgentTaskState> replyTo
+            ActorRef<GoalState> replyTo
     ) implements Command {
     }
 
-    public record GetTask(String taskId, ActorRef<AgentTaskState> replyTo) implements Command {
+    public record GetGoal(String goalId, ActorRef<GoalState> replyTo) implements Command {
     }
 
-    private record WrappedTaskResult(String taskId, AgentResult result, Throwable failure) implements Command {
+    private record WrappedGoalResult(String goalId, AgentResult result, Throwable failure) implements Command {
     }
 
-    private record CleanupExpiredTasks() implements Command {
+    private record CleanupExpiredGoals() implements Command {
     }
 
-    private record StoredTask(AgentTaskState state, long terminalAtMillis) {
+    private record StoredGoal(GoalState state, long terminalAtMillis) {
         boolean isTerminal() {
-            return state.status() == AgentTaskStatus.COMPLETED || state.status() == AgentTaskStatus.FAILED;
+            return state.status() == GoalStatus.COMPLETED || state.status() == GoalStatus.FAILED;
         }
     }
 
     @Override
     public Receive<Command> createReceive() {
         return newReceiveBuilder()
-                .onMessage(StartTask.class, this::onStartTask)
-                .onMessage(GetTask.class, this::onGetTask)
-                .onMessage(WrappedTaskResult.class, this::onWrappedTaskResult)
-                .onMessage(CleanupExpiredTasks.class, this::onCleanupExpiredTasks)
+                .onMessage(StartGoal.class, this::onStartGoal)
+                .onMessage(GetGoal.class, this::onGetGoal)
+                .onMessage(WrappedGoalResult.class, this::onWrappedGoalResult)
+                .onMessage(CleanupExpiredGoals.class, this::onCleanupExpiredGoals)
                 .build();
     }
 
-    private Behavior<Command> onStartTask(StartTask command) {
+    private Behavior<Command> onStartGoal(StartGoal command) {
         pruneTasks();
-        AgentTaskState running = AgentTaskState.running(command.taskId());
-        tasks.put(command.taskId(), new StoredTask(running, 0L));
+        GoalState running = GoalState.running(command.goalId());
+        goals.put(command.goalId(), new StoredGoal(running, 0L));
         command.replyTo().tell(running);
         runtimeService.invoke(
-                new AgentRequest(command.taskId(), command.input()),
+                new AgentRequest(command.goalId(), command.input()),
                 command.system(),
                 command.timeout()
         ).whenComplete((result, failure) ->
-                getContext().getSelf().tell(new WrappedTaskResult(command.taskId(), result, failure)));
+                getContext().getSelf().tell(new WrappedGoalResult(command.goalId(), result, failure)));
         return this;
     }
 
-    private Behavior<Command> onGetTask(GetTask command) {
+    private Behavior<Command> onGetGoal(GetGoal command) {
         pruneTasks();
-        StoredTask task = tasks.get(command.taskId());
-        command.replyTo().tell(task == null ? AgentTaskState.notFound(command.taskId()) : task.state());
+        StoredGoal goal = goals.get(command.goalId());
+        command.replyTo().tell(goal == null ? GoalState.notFound(command.goalId()) : goal.state());
         return this;
     }
 
-    private Behavior<Command> onWrappedTaskResult(WrappedTaskResult wrapped) {
+    private Behavior<Command> onWrappedGoalResult(WrappedGoalResult wrapped) {
         pruneTasks();
         if (wrapped.failure() != null) {
-            tasks.put(
-                    wrapped.taskId(),
-                    new StoredTask(AgentTaskState.failed(wrapped.taskId(), wrapped.failure().getMessage()), clock.millis())
+            goals.put(
+                    wrapped.goalId(),
+                    new StoredGoal(GoalState.failed(wrapped.goalId(), wrapped.failure().getMessage()), clock.millis())
             );
         } else if (wrapped.result() == null) {
-            tasks.put(
-                    wrapped.taskId(),
-                    new StoredTask(AgentTaskState.failed(wrapped.taskId(), "Task completed without a result."), clock.millis())
+            goals.put(
+                    wrapped.goalId(),
+                    new StoredGoal(GoalState.failed(wrapped.goalId(), "Goal completed without a result."), clock.millis())
             );
         } else {
-            tasks.put(
-                    wrapped.taskId(),
-                    new StoredTask(AgentTaskState.completed(wrapped.taskId(), wrapped.result()), clock.millis())
+            goals.put(
+                    wrapped.goalId(),
+                    new StoredGoal(GoalState.completed(wrapped.goalId(), wrapped.result()), clock.millis())
             );
         }
         enforceRetentionLimit();
         return this;
     }
 
-    private Behavior<Command> onCleanupExpiredTasks(CleanupExpiredTasks ignored) {
+    private Behavior<Command> onCleanupExpiredGoals(CleanupExpiredGoals ignored) {
         pruneTasks();
         scheduleCleanup();
         return this;
@@ -161,25 +161,25 @@ public final class AgentTaskRegistryActor extends AbstractBehavior<AgentTaskRegi
         long now = clock.millis();
         if (!taskRetention.isZero() && !taskRetention.isNegative()) {
             long cutoff = now - taskRetention.toMillis();
-            tasks.entrySet().removeIf(entry -> entry.getValue().isTerminal() && entry.getValue().terminalAtMillis() <= cutoff);
+            goals.entrySet().removeIf(entry -> entry.getValue().isTerminal() && entry.getValue().terminalAtMillis() <= cutoff);
         }
         enforceRetentionLimit();
     }
 
     private void enforceRetentionLimit() {
-        List<Map.Entry<String, StoredTask>> terminalTasks = new ArrayList<>();
-        for (Map.Entry<String, StoredTask> entry : tasks.entrySet()) {
+        List<Map.Entry<String, StoredGoal>> terminalGoals = new ArrayList<>();
+        for (Map.Entry<String, StoredGoal> entry : goals.entrySet()) {
             if (entry.getValue().isTerminal()) {
-                terminalTasks.add(entry);
+                terminalGoals.add(entry);
             }
         }
-        if (terminalTasks.size() <= maxRetainedTasks) {
+        if (terminalGoals.size() <= maxRetainedTasks) {
             return;
         }
-        terminalTasks.sort(Comparator.comparingLong(entry -> entry.getValue().terminalAtMillis()));
-        int toRemove = terminalTasks.size() - maxRetainedTasks;
+        terminalGoals.sort(Comparator.comparingLong(entry -> entry.getValue().terminalAtMillis()));
+        int toRemove = terminalGoals.size() - maxRetainedTasks;
         for (int index = 0; index < toRemove; index++) {
-            tasks.remove(terminalTasks.get(index).getKey());
+            goals.remove(terminalGoals.get(index).getKey());
         }
     }
 
@@ -187,6 +187,6 @@ public final class AgentTaskRegistryActor extends AbstractBehavior<AgentTaskRegi
         Duration cleanupInterval = taskRetention.isZero() || taskRetention.isNegative()
                 ? Duration.ofMinutes(5)
                 : taskRetention;
-        getContext().scheduleOnce(cleanupInterval, getContext().getSelf(), new CleanupExpiredTasks());
+        getContext().scheduleOnce(cleanupInterval, getContext().getSelf(), new CleanupExpiredGoals());
     }
 }

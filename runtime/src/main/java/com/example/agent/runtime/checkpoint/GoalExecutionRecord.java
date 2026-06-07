@@ -1,16 +1,16 @@
 package com.example.agent.runtime.checkpoint;
 
-public record TaskExecutionRecord(
-        String taskId,
+public record GoalExecutionRecord(
+        String goalId,
         String description,
-        TaskExecutionStatus status,
+        GoalExecutionStatus status,
         String resultRef,
         String error
 ) {
-    public TaskExecutionRecord {
-        taskId = taskId == null ? "" : taskId;
+    public GoalExecutionRecord {
+        goalId = goalId == null ? "" : goalId;
         description = description == null ? "" : description;
-        status = status == null ? TaskExecutionStatus.PENDING : status;
+        status = status == null ? GoalExecutionStatus.PENDING : status;
         resultRef = resultRef == null ? "" : resultRef;
         error = error == null ? "" : error;
     }

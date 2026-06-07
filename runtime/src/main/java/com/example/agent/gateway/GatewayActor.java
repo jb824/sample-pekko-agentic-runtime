@@ -7,6 +7,7 @@ import com.example.agent.runtime.AgentError;
 import com.example.agent.runtime.AgentResult;
 import com.example.agent.runtime.AgentStatus;
 import com.example.agent.runtime.agent.DefaultAgentSystemExecutorActor;
+import com.example.agent.runtime.agent.PromptBudget;
 import com.example.agent.runtime.consumer.AgentConsumerRegistryActor;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.rag.runtime.RagProtocol;
@@ -32,6 +33,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
     private final int ragMaxContextChars;
     private final Duration executionTimeout;
     private final Duration toolTimeout;
+    private final PromptBudget promptBudget;
     private final int maxConcurrentRequests;
     private int inFlightRequests;
 
@@ -48,6 +50,36 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
             Duration toolTimeout,
             int maxConcurrentRequests
     ) {
+        return create(
+                llmWorker,
+                toolRegistry,
+                memoryRegistry,
+                ragRuntime,
+                consumerRegistry,
+                ragEnabled,
+                ragTopK,
+                ragMaxContextChars,
+                executionTimeout,
+                toolTimeout,
+                PromptBudget.disabled(),
+                maxConcurrentRequests
+        );
+    }
+
+    public static Behavior<Command> create(
+            ActorRef<LlmProtocol.Command> llmWorker,
+            ActorRef<ToolProtocol.Command> toolRegistry,
+            ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry,
+            ActorRef<RagProtocol.Command> ragRuntime,
+            ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry,
+            boolean ragEnabled,
+            int ragTopK,
+            int ragMaxContextChars,
+            Duration executionTimeout,
+            Duration toolTimeout,
+            PromptBudget promptBudget,
+            int maxConcurrentRequests
+    ) {
         return Behaviors.setup(context -> new GatewayActor(
                 context,
                 llmWorker,
@@ -60,6 +92,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
                 ragMaxContextChars,
                 executionTimeout,
                 toolTimeout,
+                promptBudget,
                 maxConcurrentRequests
         ));
     }
@@ -76,6 +109,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
             int ragMaxContextChars,
             Duration executionTimeout,
             Duration toolTimeout,
+            PromptBudget promptBudget,
             int maxConcurrentRequests
     ) {
         super(context);
@@ -89,6 +123,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
         this.ragMaxContextChars = Math.max(0, ragMaxContextChars);
         this.executionTimeout = Objects.requireNonNull(executionTimeout);
         this.toolTimeout = Objects.requireNonNull(toolTimeout);
+        this.promptBudget = promptBudget == null ? PromptBudget.disabled() : promptBudget;
         this.maxConcurrentRequests = Math.max(1, maxConcurrentRequests);
     }
 
@@ -141,7 +176,8 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
                         ragTopK,
                         ragMaxContextChars,
                         executionTimeout,
-                        toolTimeout
+                        toolTimeout,
+                        promptBudget
                 ),
                 "agent-system-executor-" + command.request().requestId()
         );

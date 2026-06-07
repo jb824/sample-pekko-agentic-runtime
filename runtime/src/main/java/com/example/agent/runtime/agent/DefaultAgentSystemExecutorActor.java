@@ -3,7 +3,6 @@ package com.example.agent.runtime.agent;
 import com.example.agent.api.Agent;
 import com.example.agent.api.AgentMemoryConfig;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTaskDefinition;
 import com.example.agent.api.GatewayAgent;
 import com.example.agent.llm.LlmProtocol;
 import com.example.agent.protocol.AgentRequest;
@@ -48,6 +47,7 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
     private final RagContextBuilder ragContextBuilder;
     private final Duration executionTimeout;
     private final Duration toolTimeout;
+    private final PromptBudget promptBudget;
 
     public static Behavior<Command> create(
             ActorRef<LlmProtocol.Command> llmWorker,
@@ -59,7 +59,8 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
             int ragTopK,
             int ragMaxContextChars,
             Duration executionTimeout,
-            Duration toolTimeout
+            Duration toolTimeout,
+            PromptBudget promptBudget
     ) {
         return Behaviors.setup(context -> new DefaultAgentSystemExecutorActor(
                 context,
@@ -72,7 +73,8 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                 ragTopK,
                 ragMaxContextChars,
                 executionTimeout,
-                toolTimeout
+                toolTimeout,
+                promptBudget
         ));
     }
 
@@ -87,7 +89,8 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
             int ragTopK,
             int ragMaxContextChars,
             Duration executionTimeout,
-            Duration toolTimeout
+            Duration toolTimeout,
+            PromptBudget promptBudget
     ) {
         super(context);
         this.llmWorker = Objects.requireNonNull(llmWorker);
@@ -100,9 +103,10 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
         this.ragContextBuilder = new RagContextBuilder(ragMaxContextChars);
         this.executionTimeout = Objects.requireNonNull(executionTimeout);
         this.toolTimeout = Objects.requireNonNull(toolTimeout);
+        this.promptBudget = promptBudget == null ? PromptBudget.disabled() : promptBudget;
     }
 
-    public sealed interface Command permits Start, ExecutionTimeout, WrappedToolsRegistered, WrappedRagResult, WrappedStepResult, WrappedGatewayMemoryRecall, WrappedGatewayResponse {
+    public sealed interface Command permits Start, ExecutionTimeout, WrappedToolsRegistered, WrappedRagResult, WrappedStepResult, WrappedGatewayRouteResponse, WrappedGatewayMemoryRecall, WrappedGatewayResponse {
     }
 
     public record Start(AgentRequest request, AgentSystem system, ActorRef<AgentResult> replyTo) implements Command {
@@ -118,6 +122,9 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
     }
 
     private record WrappedStepResult(AgentStepActor.Result result) implements Command {
+    }
+
+    private record WrappedGatewayRouteResponse(LlmProtocol.Response response) implements Command {
     }
 
     private record WrappedGatewayMemoryRecall(AgentMemoryRegistryActor.Recalled recalled) implements Command {
@@ -209,10 +216,101 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
     }
 
     private Behavior<Command> runNextDelegate(ExecutionState state) {
+        if (state.system().entrypoint().orchestrationMode() == GatewayAgent.OrchestrationMode.MODEL_DRIVEN) {
+            return runModelDrivenRoute(state);
+        }
         if (state.delegateIndex() >= state.delegates().size()) {
             return runGatewaySynthesis(state);
         }
         Agent delegate = state.delegates().get(state.delegateIndex());
+        return spawnDelegateStep(state, delegate);
+    }
+
+    private Behavior<Command> runModelDrivenRoute(ExecutionState state) {
+        if (state.delegateIndex() >= state.system().entrypoint().acceptedGoal().maxIterations()) {
+            return runGatewaySynthesis(state);
+        }
+        ActorRef<LlmProtocol.Response> adapter =
+                getContext().messageAdapter(LlmProtocol.Response.class, WrappedGatewayRouteResponse::new);
+        String prompt = GatewayPromptBuilder.buildRoute(
+                state.request(),
+                state.system().entrypoint(),
+                state.delegates(),
+                state.delegateOutputs(),
+                state.ragContext(),
+                promptBudget);
+        if (prompt.length() > promptBudget.maxPromptChars()) {
+            AgentResult result = contextBudgetFailure(state, "gateway");
+            state.replyTo().tell(result);
+            dispatchCompleted(state, result);
+            return Behaviors.stopped();
+        }
+        llmWorker.tell(new LlmProtocol.Ask(
+                state.request().requestId() + ":gateway:" + state.system().entrypoint().name() + ":route:" + state.delegateIndex(),
+                prompt,
+                adapter));
+        return waitingForGatewayRoute(state);
+    }
+
+    private Behavior<Command> waitingForGatewayRoute(ExecutionState state) {
+        return Behaviors.receive(Command.class)
+                .onMessage(WrappedGatewayRouteResponse.class, wrapped -> onGatewayRouteResponse(state, wrapped))
+                .onMessage(ExecutionTimeout.class, ignored -> onExecutionTimeout(state))
+                .build();
+    }
+
+    private Behavior<Command> onGatewayRouteResponse(ExecutionState state, WrappedGatewayRouteResponse wrapped) {
+        if (!wrapped.response().isSuccess()) {
+            String err = wrapped.response().error() == null ? "gateway route LLM failure" : wrapped.response().error().getMessage();
+            rememberGateway(state, AgentMemoryEventType.FAILURE, err);
+            AgentResult result = new AgentResult(
+                    state.request().requestId(),
+                    AgentStatus.FAILED_SYSTEM,
+                    "",
+                    state.distinctSources(),
+                    List.of(new AgentError("gateway_route_failed", err, true, "gateway")));
+            state.replyTo().tell(result);
+            dispatchCompleted(state, result);
+            return Behaviors.stopped();
+        }
+        String text = wrapped.response().text();
+        String finalAnswer = routeFinalText(text);
+        if (!finalAnswer.isBlank()) {
+            AgentResult result = new AgentResult(
+                    state.request().requestId(),
+                    AgentStatus.COMPLETED,
+                    withSources(state, finalAnswer),
+                    state.distinctSources(),
+                    List.of());
+            rememberGateway(state, AgentMemoryEventType.FINAL_ANSWER, finalAnswer);
+            state.replyTo().tell(result);
+            dispatchCompleted(state, result);
+            return Behaviors.stopped();
+        }
+        String delegateName = routeDelegateName(text);
+        Agent delegate = state.delegates().stream()
+                .filter(candidate -> candidate.name().equals(delegateName))
+                .findFirst()
+                .orElse(null);
+        if (delegate == null) {
+            AgentResult result = new AgentResult(
+                    state.request().requestId(),
+                    AgentStatus.FAILED_SYSTEM,
+                    "",
+                    state.distinctSources(),
+                    List.of(new AgentError(
+                            "gateway_route_invalid",
+                            "Gateway selected unknown delegate: " + delegateName,
+                            true,
+                            "gateway")));
+            state.replyTo().tell(result);
+            dispatchCompleted(state, result);
+            return Behaviors.stopped();
+        }
+        return spawnDelegateStep(state, delegate);
+    }
+
+    private Behavior<Command> spawnDelegateStep(ExecutionState state, Agent delegate) {
         ActorRef<AgentStepActor.Result> stepReply =
                 getContext().messageAdapter(AgentStepActor.Result.class, WrappedStepResult::new);
         ActorRef<AgentStepActor.Command> stepActor = getContext().spawn(
@@ -223,14 +321,15 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                         state.request(),
                         state.system().entrypoint().name(),
                         delegate,
-                        taskFor(state.system(), delegate),
+                        state.system().entrypoint().acceptedGoal(),
                         state.request().input(),
                         state.lastStepOutput(),
                         state.ragContext(),
                         state.system().toolDefinitions(),
                         toolTimeout,
+                        promptBudget,
                         stepReply),
-                "step-" + delegate.name() + "-" + state.request().requestId());
+                "step-" + state.delegateIndex() + "-" + delegate.name() + "-" + state.request().requestId());
         getContext().getLog().info(
                 "Spawning step actor request={} agent={} hasPrior={}",
                 state.request().requestId(), delegate.name(), !state.lastStepOutput().isEmpty());
@@ -294,14 +393,22 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
     private Behavior<Command> askGatewayLlm(ExecutionState state) {
         ActorRef<LlmProtocol.Response> adapter =
                 getContext().messageAdapter(LlmProtocol.Response.class, WrappedGatewayResponse::new);
+        String prompt = GatewayPromptBuilder.build(
+                state.request(),
+                state.system().entrypoint(),
+                state.delegateOutputs(),
+                state.gatewayMemory(),
+                state.ragContext(),
+                promptBudget);
+        if (prompt.length() > promptBudget.maxPromptChars()) {
+            AgentResult result = contextBudgetFailure(state, "gateway");
+            state.replyTo().tell(result);
+            dispatchCompleted(state, result);
+            return Behaviors.stopped();
+        }
         llmWorker.tell(new LlmProtocol.Ask(
                 state.request().requestId() + ":gateway:" + state.system().entrypoint().name(),
-                GatewayPromptBuilder.build(
-                        state.request(),
-                        state.system().entrypoint(),
-                        state.delegateOutputs(),
-                        state.gatewayMemory(),
-                        state.ragContext()),
+                prompt,
                 adapter));
         return waitingForGatewayLlm(state);
     }
@@ -355,6 +462,20 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
         return Behaviors.stopped();
     }
 
+    private AgentResult contextBudgetFailure(ExecutionState state, String owner) {
+        return new AgentResult(
+                state.request().requestId(),
+                AgentStatus.FAILED_SYSTEM,
+                "",
+                state.distinctSources(),
+                List.of(new AgentError(
+                        "context_budget_exceeded",
+                        "Prompt context exceeds configured budget before LLM call: max_prompt_chars="
+                                + promptBudget.maxPromptChars(),
+                        false,
+                        owner)));
+    }
+
     private void dispatchCompleted(ExecutionState state, AgentResult result) {
         if (consumerRegistry == null) {
             return;
@@ -394,12 +515,6 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
                 + distinct.stream().map(source -> "- " + source).collect(Collectors.joining("\n"));
     }
 
-    private static AgentTaskDefinition taskFor(AgentSystem system, Agent delegate) {
-        return delegate.acceptedTasks().isEmpty()
-                ? system.entrypoint().acceptedTask()
-                : delegate.acceptedTasks().getFirst();
-    }
-
     private static List<Agent> delegatesFor(AgentSystem system) {
         Map<String, Agent> byName = system.agents().stream()
                 .collect(Collectors.toMap(Agent::name, agent -> agent, (left, right) -> left));
@@ -420,6 +535,26 @@ public final class DefaultAgentSystemExecutorActor extends AbstractBehavior<Defa
             case FINAL_ANSWER -> AgentMemoryConfig.MemoryEventType.FINAL_ANSWER;
             case FAILURE -> AgentMemoryConfig.MemoryEventType.FAILURE;
         });
+    }
+
+    private static String routeDelegateName(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        for (String line : text.strip().split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.regionMatches(true, 0, "DELEGATE:", 0, "DELEGATE:".length())) {
+                return trimmed.substring("DELEGATE:".length()).trim();
+            }
+        }
+        return "";
+    }
+
+    private static String routeFinalText(String text) {
+        return ToolCallParser.embeddedFinalText(text)
+                .orElseGet(() -> text != null && text.strip().regionMatches(true, 0, "FINAL:", 0, "FINAL:".length())
+                        ? ToolCallParser.finalText(text)
+                        : "");
     }
 
     private record ExecutionState(

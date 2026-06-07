@@ -2,11 +2,11 @@ package com.example.agent;
 
 import com.example.agent.adapter.grpc.GrpcServerAdapter;
 import com.example.agent.api.Agent;
-import com.example.agent.api.AgentTaskDefinition;
+import com.example.agent.api.GoalDefinition;
 import com.example.agent.api.AgentRuntime;
 import com.example.agent.api.AgentSystem;
 import com.example.agent.api.GatewayAgent;
-import com.example.agent.api.Task;
+import com.example.agent.api.Goal;
 import com.example.agent.config.AppConfig;
 import com.example.agent.config.PekkoRuntimeConfig;
 import com.example.agent.http.AgentHttpServer;
@@ -26,7 +26,7 @@ import com.example.agent.runtime.AgentResult;
 import com.example.agent.runtime.AgentRuntimeService;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.runtime.memory.InMemoryAgentMemoryStore;
-import com.example.agent.runtime.task.AgentTaskRegistryActor;
+import com.example.agent.runtime.goal.GoalRegistryActor;
 import com.example.agent.runtime.telemetry.TelemetryBootstrap;
 import com.example.agent.runtime.tool.ToolProtocol;
 import com.example.agent.runtime.tool.ToolRegistryActor;
@@ -207,7 +207,7 @@ public final class Main {
                 .host(httpHost)
                 .port(httpPort)
                 .syncEndpoint("/v1/agents/execute", system, "agent.request")
-                .asyncEndpoint("/v1/agents/tasks", system, "agent.request")
+                .asyncEndpoint("/v1/agents/goals", system, "agent.request")
                 .build()
                 : null;
 
@@ -256,13 +256,12 @@ public final class Main {
 
     private static AgentSystem defaultApiAgentSystem(AppConfig config) {
         String[] tools = parseEnabledTools(config.enabledTools()).toArray(String[]::new);
-        AgentTaskDefinition task = AgentTaskDefinition.named("agent.request")
+        GoalDefinition task = GoalDefinition.named("agent.request")
                 .describedAs("Handle a generic agent request.")
                 .maxIterations(1)
                 .build();
         Agent assistant = Agent.named("assistant")
                 .instructedBy("Answer the user request directly, use tools when available, and return a concise factual result.")
-                .accepts(task)
                 .uses(tools)
                 .build();
         GatewayAgent gateway = GatewayAgent.named("gateway")

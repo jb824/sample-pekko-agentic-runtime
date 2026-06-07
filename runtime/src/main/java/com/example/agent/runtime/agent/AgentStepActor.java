@@ -2,7 +2,7 @@ package com.example.agent.runtime.agent;
 
 import com.example.agent.api.Agent;
 import com.example.agent.api.AgentMemoryConfig;
-import com.example.agent.api.AgentTaskDefinition;
+import com.example.agent.api.GoalDefinition;
 import com.example.agent.api.AgentToolDefinition;
 import com.example.agent.llm.LlmProtocol;
 import com.example.agent.protocol.AgentRequest;
@@ -37,14 +37,15 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
     private final AgentRequest request;
     private final String gatewayName;
     private final Agent agent;
-    private final AgentTaskDefinition task;
+    private final GoalDefinition task;
     private final String originalInput;
     private final String stepInput;
     private final String retrievedKnowledgeContext;
     private final List<AgentToolDefinition> toolDefinitions;
     private final Duration toolTimeout;
+    private final PromptBudget promptBudget;
     private final ActorRef<Result> replyTo;
-    private final List<String> observations = new ArrayList<>();
+    private final List<ToolObservation> observations = new ArrayList<>();
     private final List<String> sources = new ArrayList<>();
     private List<AgentMemoryEvent> recalledMemory = List.of();
     private int iteration;
@@ -57,12 +58,13 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
             AgentRequest request,
             String gatewayName,
             Agent agent,
-            AgentTaskDefinition task,
+            GoalDefinition task,
             String originalInput,
             String stepInput,
             String retrievedKnowledgeContext,
             List<AgentToolDefinition> toolDefinitions,
             Duration toolTimeout,
+            PromptBudget promptBudget,
             ActorRef<Result> replyTo
     ) {
         return Behaviors.setup(context -> new AgentStepActor(
@@ -79,6 +81,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 retrievedKnowledgeContext,
                 toolDefinitions,
                 toolTimeout,
+                promptBudget,
                 replyTo
         ));
     }
@@ -91,12 +94,13 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
             AgentRequest request,
             String gatewayName,
             Agent agent,
-            AgentTaskDefinition task,
+            GoalDefinition task,
             String originalInput,
             String stepInput,
             String retrievedKnowledgeContext,
             List<AgentToolDefinition> toolDefinitions,
             Duration toolTimeout,
+            PromptBudget promptBudget,
             ActorRef<Result> replyTo
     ) {
         super(context);
@@ -114,6 +118,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 : retrievedKnowledgeContext;
         this.toolDefinitions = toolDefinitions == null ? List.of() : List.copyOf(toolDefinitions);
         this.toolTimeout = Objects.requireNonNull(toolTimeout);
+        this.promptBudget = promptBudget == null ? PromptBudget.disabled() : promptBudget;
         this.replyTo = Objects.requireNonNull(replyTo);
     }
 
@@ -186,9 +191,20 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
             return finishFailure("agent_iterations_exhausted", "Agent exhausted max iterations before producing a final answer.", true);
         }
         ActorRef<LlmProtocol.Response> adapter = getContext().messageAdapter(LlmProtocol.Response.class, WrappedLlmResponse::new);
+        String prompt = prompt();
+        if (prompt.length() > promptBudget.maxPromptChars()) {
+            remember(AgentMemoryEventType.USER_TASK, originalInput);
+            remember(AgentMemoryEventType.FAILURE, "Prompt context exceeds configured budget before LLM call.");
+            return finishFailure(
+                    "context_budget_exceeded",
+                    "Prompt context exceeds configured budget before LLM call: max_prompt_chars="
+                            + promptBudget.maxPromptChars(),
+                    false
+            );
+        }
         llmWorker.tell(new LlmProtocol.Ask(
                 request.requestId() + ":agent:" + agent.name() + ":iteration:" + iteration,
-                prompt(),
+                prompt,
                 adapter
         ));
         return this;
@@ -204,10 +220,11 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
         Optional<ToolCallParser.ToolCall> toolCall = ToolCallParser.parse(text);
         if (toolCall.isEmpty()) {
             String output = ToolCallParser.finalText(text);
-            remember(AgentMemoryEventType.USER_TASK, originalInput);
-            remember(AgentMemoryEventType.AGENT_OUTPUT, output);
-            replyTo.tell(new Result(agent.name(), output, sources, List.of()));
-            return Behaviors.stopped();
+            return finishSuccess(output);
+        }
+        Optional<String> embeddedFinal = ToolCallParser.embeddedFinalText(text);
+        if (!observations.isEmpty() && embeddedFinal.isPresent()) {
+            return finishSuccess(embeddedFinal.get());
         }
         if (iteration + 1 >= task.maxIterations()) {
             remember(AgentMemoryEventType.USER_TASK, originalInput);
@@ -220,7 +237,15 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
         }
         if (!declaredTools().contains(toolCall.get().toolName())) {
             String observation = "Tool " + toolCall.get().toolName() + " failed: undeclared for agent " + agent.name();
-            observations.add(observation);
+            observations.add(ToolObservation.failure(toolCall.get().toolName(), toolCall.get().arguments(), observation));
+            remember(AgentMemoryEventType.TOOL_OBSERVATION, observation);
+            iteration++;
+            return requestLlm();
+        }
+        if (hasPriorObservation(toolCall.get())) {
+            String observation = "Tool " + toolCall.get().toolName()
+                    + " was already called with these arguments; reuse the prior result.";
+            observations.add(ToolObservation.failure(toolCall.get().toolName(), toolCall.get().arguments(), observation));
             remember(AgentMemoryEventType.TOOL_OBSERVATION, observation);
             iteration++;
             return requestLlm();
@@ -265,7 +290,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                     result.sources().size()
             );
             String observation = "Tool " + result.toolName() + ":\n" + result.output();
-            observations.add(observation);
+            observations.add(ToolObservation.success(result.toolName(), pendingTool.arguments(), result.output()));
             sources.addAll(result.sources());
             remember(AgentMemoryEventType.TOOL_OBSERVATION, observation);
         } else {
@@ -279,7 +304,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                     result.error().toString()
             );
             String observation = "Tool " + result.toolName() + " failed: " + result.error().getMessage();
-            observations.add(observation);
+            observations.add(ToolObservation.failure(result.toolName(), pendingTool.arguments(), observation));
             remember(AgentMemoryEventType.TOOL_OBSERVATION, observation);
         }
         pendingTool = null;
@@ -300,11 +325,18 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 iteration + 1
         );
         String observation = "Tool " + timeout.toolName() + " timed out.";
-        observations.add(observation);
+        observations.add(ToolObservation.failure(timeout.toolName(), pendingTool.arguments(), observation));
         remember(AgentMemoryEventType.TOOL_OBSERVATION, observation);
         pendingTool = null;
         iteration++;
         return requestLlm();
+    }
+
+    private Behavior<Command> finishSuccess(String output) {
+        remember(AgentMemoryEventType.USER_TASK, originalInput);
+        remember(AgentMemoryEventType.AGENT_OUTPUT, output);
+        replyTo.tell(new Result(agent.name(), output, sources, List.of()));
+        return Behaviors.stopped();
     }
 
     private Behavior<Command> finishFailure(String code, String message, boolean retryable) {
@@ -324,7 +356,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 Current input for this agent:
                 %s
 
-                Task definition:
+                Goal definition:
                 - Name: %s
                 - Description: %s
 
@@ -345,6 +377,9 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 TOOL: tool.name
                 ARG key=value
 
+                Respond with either TOOL or FINAL, never both.
+                After observing a tool result, answer with FINAL using the observation unless a different tool is required.
+
                 If you can answer, respond with:
                 FINAL: your answer
                 """.formatted(
@@ -356,7 +391,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 safe(task.description()),
                 memorySection(),
                 retrievedKnowledgeContext,
-                observations.isEmpty() ? "None." : String.join("\n\n", observations),
+                observationsSection(),
                 toolsSection()
         );
     }
@@ -387,6 +422,24 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
 
     private Set<String> declaredTools() {
         return new LinkedHashSet<>(agent.tools());
+    }
+
+    private boolean hasPriorObservation(ToolCallParser.ToolCall toolCall) {
+        return observations.stream()
+                .anyMatch(observation -> observation.success()
+                        && observation.toolName().equals(toolCall.toolName())
+                        && observation.arguments().equals(toolCall.arguments()));
+    }
+
+    private String observationsSection() {
+        if (observations.isEmpty()) {
+            return "None.";
+        }
+        int maxChars = Math.max(512, promptBudget.maxPromptChars() / 3);
+        List<String> rendered = observations.stream()
+                .map(observation -> observation.render(Math.max(256, maxChars / observations.size())))
+                .toList();
+        return PromptCompactor.fitSections(rendered, maxChars);
     }
 
     private String toolsSection() {
@@ -433,5 +486,32 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
             case FINAL_ANSWER -> AgentMemoryConfig.MemoryEventType.FINAL_ANSWER;
             case FAILURE -> AgentMemoryConfig.MemoryEventType.FAILURE;
         });
+    }
+
+    private record ToolObservation(String toolName, Map<String, String> arguments, String output, boolean success) {
+        private ToolObservation {
+            toolName = toolName == null ? "" : toolName;
+            arguments = arguments == null ? Map.of() : Map.copyOf(arguments);
+            output = output == null ? "" : output;
+        }
+
+        static ToolObservation success(String toolName, Map<String, String> arguments, String output) {
+            return new ToolObservation(toolName, arguments, output, true);
+        }
+
+        static ToolObservation failure(String toolName, Map<String, String> arguments, String output) {
+            return new ToolObservation(toolName, arguments, output, false);
+        }
+
+        String render(int maxChars) {
+            String prefix = success
+                    ? "Tool " + toolName + argumentsText() + ":\n"
+                    : "";
+            return PromptCompactor.fit(prefix + output, maxChars);
+        }
+
+        private String argumentsText() {
+            return arguments.isEmpty() ? "" : " " + arguments;
+        }
     }
 }

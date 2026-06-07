@@ -11,15 +11,16 @@ class AgentWorkflowTest {
         AgentWorkflow workflow = new TestWorkflow();
 
         assertEquals("assistant-gateway", workflow.system().entrypoint().name());
-        assertEquals("agent.request", workflow.taskType());
-        assertEquals("Task: hello", workflow.task("hello").instructions());
+        assertEquals("agent.request", workflow.goalType());
+        assertEquals("Goal: hello", workflow.goal("hello").instructions());
+        assertEquals(workflow.goalDefinition(), workflow.system().goalDefinition("agent.request"));
         assertEquals(1, workflow.system().agents().size());
     }
 
     @Test
     void rejectsGatewayDelegateThatIsNotRegistered() {
-        AgentTaskDefinition task = AgentTaskDefinition.named("agent.request").build();
-        Agent assistant = Agent.named("assistant").accepts(task).build();
+        GoalDefinition task = GoalDefinition.named("agent.request").build();
+        Agent assistant = Agent.named("assistant").build();
         GatewayAgent gateway = GatewayAgent.named("assistant-gateway")
                 .accepts(task)
                 .delegatesTo(assistant)
@@ -40,9 +41,9 @@ class AgentWorkflowTest {
     }
 
     private static final class TestWorkflow implements AgentWorkflow {
-        private static final AgentTaskDefinition TASK = AgentTaskDefinition.named("agent.request")
+        private static final GoalDefinition TASK = GoalDefinition.named("agent.request")
                 .describedAs("Handle an agent request.")
-                .template("Task: {{input}}")
+                .template("Goal: {{input}}")
                 .maxIterations(1)
                 .build();
         private final AgentSystem system;
@@ -50,7 +51,6 @@ class AgentWorkflowTest {
         private TestWorkflow() {
             Agent agent = Agent.named("assistant")
                     .instructedBy("Answer concisely.")
-                    .accepts(TASK)
                     .uses("time.now")
                     .build();
             GatewayAgent gateway = GatewayAgent.named("assistant-gateway")
@@ -66,7 +66,7 @@ class AgentWorkflowTest {
         }
 
         @Override
-        public AgentTaskDefinition taskDefinition() {
+        public GoalDefinition goalDefinition() {
             return TASK;
         }
 

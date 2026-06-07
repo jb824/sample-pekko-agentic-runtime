@@ -18,7 +18,8 @@ import com.example.agent.runtime.consumer.AgentConsumerRegistryActor;
 import com.example.agent.runtime.memory.AgentMemoryStore;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.runtime.memory.InMemoryAgentMemoryStore;
-import com.example.agent.runtime.task.AgentTaskRegistryActor;
+import com.example.agent.runtime.goal.GoalRegistryActor;
+import com.example.agent.runtime.agent.PromptBudget;
 import com.example.agent.runtime.telemetry.TelemetryBootstrap;
 import com.example.agent.runtime.tool.ToolRegistryActor;
 import dev.langchain4j.model.chat.ChatModel;
@@ -63,40 +64,40 @@ public final class AgentRuntime implements AutoCloseable {
         return new Builder();
     }
 
-    public CompletionStage<AgentResult> run(AgentSystem system, AgentTaskRequest task) {
-        return run(AgentRunContext.defaults(), UUID.randomUUID().toString(), system, task, defaultTimeout);
+    public CompletionStage<AgentResult> run(AgentSystem system, GoalRequest goal) {
+        return run(AgentRunContext.defaults(), UUID.randomUUID().toString(), system, goal, defaultTimeout);
     }
 
-    public CompletionStage<AgentResult> run(String requestId, AgentSystem system, AgentTaskRequest task, Duration timeout) {
-        return run(AgentRunContext.defaults(), requestId, system, task, timeout);
+    public CompletionStage<AgentResult> run(String requestId, AgentSystem system, GoalRequest goal, Duration timeout) {
+        return run(AgentRunContext.defaults(), requestId, system, goal, timeout);
     }
 
-    public CompletionStage<AgentResult> run(AgentRunContext context, AgentSystem system, AgentTaskRequest task) {
-        return run(context, UUID.randomUUID().toString(), system, task, defaultTimeout);
+    public CompletionStage<AgentResult> run(AgentRunContext context, AgentSystem system, GoalRequest goal) {
+        return run(context, UUID.randomUUID().toString(), system, goal, defaultTimeout);
     }
 
-    public CompletionStage<AgentResult> run(AgentRunContext context, String requestId, AgentSystem system, AgentTaskRequest task, Duration timeout) {
+    public CompletionStage<AgentResult> run(AgentRunContext context, String requestId, AgentSystem system, GoalRequest goal, Duration timeout) {
         AgentRunContext resolvedContext = context == null ? AgentRunContext.defaults() : context;
-        AgentResult validationFailure = validateTask(requestId, system, task);
+        AgentResult validationFailure = validateGoal(requestId, system, goal);
         if (validationFailure != null) {
             return dispatchCompletedAcknowledged(
                     requestId,
                     resolvedContext.tenantId(),
                     system,
-                    task,
+                    goal,
                     validationFailure,
                     0L
             ).thenApply(ignored -> validationFailure);
         }
         return runtimeService.invoke(
-                new AgentRequest(requestId, task.instructions(), resolvedContext.tenantId()),
+                new AgentRequest(requestId, goal.instructions(), resolvedContext.tenantId()),
                 system,
                 timeout
         );
     }
 
-    private static AgentResult validateTask(String requestId, AgentSystem system, AgentTaskRequest task) {
-        AgentTaskDefinition definition = system.taskDefinition(task.name());
+    private static AgentResult validateGoal(String requestId, AgentSystem system, GoalRequest goal) {
+        GoalDefinition definition = system.goalDefinition(goal.name());
         if (definition == null) {
             return new AgentResult(
                     requestId,
@@ -105,13 +106,13 @@ public final class AgentRuntime implements AutoCloseable {
                     java.util.List.of(),
                     java.util.List.of(new com.example.agent.runtime.AgentError(
                             "unsupported_task",
-                            "Task is not accepted by this agent system: " + task.name(),
+                            "Goal is not accepted by this agent system: " + goal.name(),
                             false,
-                            "task"
+                            "goal"
                     ))
             );
         }
-        AgentTaskRuleResult validation = definition.validate(task);
+        GoalRuleResult validation = definition.validate(goal);
         if (!validation.valid()) {
             return new AgentResult(
                     requestId,
@@ -122,7 +123,7 @@ public final class AgentRuntime implements AutoCloseable {
                             "invalid_task",
                             validation.message(),
                             false,
-                            "task"
+                            "goal"
                     ))
             );
         }
@@ -137,7 +138,7 @@ public final class AgentRuntime implements AutoCloseable {
             String requestId,
             String tenantId,
             AgentSystem system,
-            AgentTaskRequest task,
+            GoalRequest goal,
             AgentResult result,
             long latencyMs
     ) {
@@ -148,7 +149,7 @@ public final class AgentRuntime implements AutoCloseable {
                 requestId,
                 tenantId,
                 system.entrypoint().name(),
-                task.instructions(),
+                goal.instructions(),
                 result.output(),
                 result.status(),
                 result.sources(),
@@ -161,7 +162,7 @@ public final class AgentRuntime implements AutoCloseable {
             String requestId,
             String tenantId,
             AgentSystem system,
-            AgentTaskRequest task,
+            GoalRequest goal,
             AgentResult result,
             long latencyMs
     ) {
@@ -172,7 +173,7 @@ public final class AgentRuntime implements AutoCloseable {
                 requestId,
                 tenantId,
                 system.entrypoint().name(),
-                task.instructions(),
+                goal.instructions(),
                 result.output(),
                 result.status(),
                 result.sources(),
@@ -237,6 +238,11 @@ public final class AgentRuntime implements AutoCloseable {
             return this;
         }
 
+        public Builder toolsFrom(Object source, Object... otherSources) {
+            this.tools.addAll(FunctionTools.from(source, otherSources));
+            return this;
+        }
+
         public Builder consumer(AgentConsumer consumer) {
             this.consumers.add(Objects.requireNonNull(consumer));
             return this;
@@ -265,6 +271,11 @@ public final class AgentRuntime implements AutoCloseable {
             ChatModel resolvedModel = chatModel == null ? ChatModelFactory.create(config) : chatModel;
             RagRuntimeComponents resolvedRag = ragRuntimeComponents == null ? RagRuntimeFactory.create(config) : ragRuntimeComponents;
             boolean ragEnabled = ragEnabledOverride == null ? config.ragEnabled() : ragEnabledOverride;
+            PromptBudget promptBudget = new PromptBudget(
+                    config.llmContextWindowTokens(),
+                    config.vllmMaxTokens(),
+                    config.llmContextSafetyTokens()
+            );
             List<AgentToolDefinition> resolvedTools = List.copyOf(tools);
             List<AgentConsumer> resolvedConsumers = List.copyOf(consumers);
             java.util.concurrent.CompletableFuture<ActorRef<AgentConsumerRegistryActor.Command>> consumerRegistryRef =
@@ -308,6 +319,7 @@ public final class AgentRuntime implements AutoCloseable {
                                 config.ragMaxContextChars(),
                                 config.workflowTimeout(),
                                 config.toolTimeout(),
+                                promptBudget,
                                 config.maxConcurrentRequests()
                         );
                     }),
@@ -315,8 +327,8 @@ public final class AgentRuntime implements AutoCloseable {
                     PekkoRuntimeConfig.forAppConfig(config)
             );
             ActorAgentRuntimeService runtimeService = new ActorAgentRuntimeService(system, system.scheduler());
-            ActorRef<AgentTaskRegistryActor.Command> taskRegistry = system.systemActorOf(
-                    AgentTaskRegistryActor.create(runtimeService, config.taskRetention(), config.maxRetainedTasks()),
+            ActorRef<GoalRegistryActor.Command> taskRegistry = system.systemActorOf(
+                    GoalRegistryActor.create(runtimeService, config.taskRetention(), config.maxRetainedTasks()),
                     "agent-task-registry",
                     Props.empty()
             );

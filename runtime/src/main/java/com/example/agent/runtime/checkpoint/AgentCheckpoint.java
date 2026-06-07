@@ -10,7 +10,7 @@ public record AgentCheckpoint(
         String agentId,
         WorkflowStep currentStep,
         String plan,
-        List<TaskExecutionRecord> tasks,
+        List<GoalExecutionRecord> goals,
         List<ToolResultRef> toolResults,
         UUID summaryId,
         String contextManifestRef,
@@ -27,7 +27,7 @@ public record AgentCheckpoint(
         agentId = agentId == null ? "" : agentId;
         currentStep = currentStep == null ? WorkflowStep.ACCEPTED : currentStep;
         plan = plan == null ? "" : plan;
-        tasks = tasks == null ? List.of() : List.copyOf(tasks);
+        goals = goals == null ? List.of() : List.copyOf(goals);
         toolResults = toolResults == null ? List.of() : List.copyOf(toolResults);
         contextManifestRef = contextManifestRef == null ? "" : contextManifestRef;
         lastProcessedEventId = lastProcessedEventId == null ? "" : lastProcessedEventId;
@@ -65,7 +65,7 @@ public record AgentCheckpoint(
                 agentId,
                 step,
                 plan,
-                tasks,
+                goals,
                 toolResults,
                 summaryId,
                 contextManifestRef,
@@ -85,7 +85,7 @@ public record AgentCheckpoint(
                 agentId,
                 currentStep,
                 plan,
-                tasks,
+                goals,
                 toolResults,
                 summaryId,
                 contextManifestRef,
@@ -105,7 +105,7 @@ public record AgentCheckpoint(
                 agentId,
                 currentStep,
                 plan,
-                tasks,
+                goals,
                 toolResults,
                 summaryId,
                 contextManifestRef,
@@ -125,7 +125,7 @@ public record AgentCheckpoint(
                 agentId,
                 currentStep,
                 plan,
-                tasks,
+                goals,
                 toolResults,
                 summaryId,
                 contextManifestRef,

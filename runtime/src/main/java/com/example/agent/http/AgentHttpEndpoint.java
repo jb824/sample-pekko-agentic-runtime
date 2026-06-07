@@ -2,7 +2,7 @@ package com.example.agent.http;
 
 import com.example.agent.api.AgentEndpoint;
 import com.example.agent.api.AgentSystem;
-import com.example.agent.api.AgentTaskRequest;
+import com.example.agent.api.GoalRequest;
 
 import java.util.Objects;
 import java.util.function.Function;
@@ -15,23 +15,23 @@ public final class AgentHttpEndpoint {
 
     private final String path;
     private final AgentSystem system;
-    private final Function<AgentHttpRequest, AgentTaskRequest> taskFactory;
+    private final Function<AgentHttpRequest, GoalRequest> goalFactory;
     private final Mode mode;
 
     private AgentHttpEndpoint(
             String path,
             AgentSystem system,
-            Function<AgentHttpRequest, AgentTaskRequest> taskFactory,
+            Function<AgentHttpRequest, GoalRequest> goalFactory,
             Mode mode
     ) {
         this.path = normalizePath(path);
         this.system = Objects.requireNonNull(system);
-        this.taskFactory = Objects.requireNonNull(taskFactory);
+        this.goalFactory = Objects.requireNonNull(goalFactory);
         this.mode = Objects.requireNonNull(mode);
     }
 
-    public static AgentHttpEndpoint sync(String path, AgentSystem system, String taskType) {
-        return sync(path, system, request -> AgentTaskRequest.of(taskType).instructions(request.input()).build());
+    public static AgentHttpEndpoint sync(String path, AgentSystem system, String goalType) {
+        return sync(path, system, request -> GoalRequest.of(goalType).instructions(request.input()).build());
     }
 
     public static AgentHttpEndpoint from(AgentEndpoint endpoint) {
@@ -39,12 +39,12 @@ public final class AgentHttpEndpoint {
             case SYNC -> sync(
                     endpoint.path(),
                     endpoint.workflow().system(),
-                    request -> endpoint.taskFor(request.input())
+                    request -> endpoint.goalFor(request.input())
             );
             case ASYNC -> async(
                     endpoint.path(),
                     endpoint.workflow().system(),
-                    request -> endpoint.taskFor(request.input())
+                    request -> endpoint.goalFor(request.input())
             );
         };
     }
@@ -52,21 +52,21 @@ public final class AgentHttpEndpoint {
     public static AgentHttpEndpoint sync(
             String path,
             AgentSystem system,
-            Function<AgentHttpRequest, AgentTaskRequest> taskFactory
+            Function<AgentHttpRequest, GoalRequest> goalFactory
     ) {
-        return new AgentHttpEndpoint(path, system, taskFactory, Mode.SYNC);
+        return new AgentHttpEndpoint(path, system, goalFactory, Mode.SYNC);
     }
 
-    public static AgentHttpEndpoint async(String path, AgentSystem system, String taskType) {
-        return async(path, system, request -> AgentTaskRequest.of(taskType).instructions(request.input()).build());
+    public static AgentHttpEndpoint async(String path, AgentSystem system, String goalType) {
+        return async(path, system, request -> GoalRequest.of(goalType).instructions(request.input()).build());
     }
 
     public static AgentHttpEndpoint async(
             String path,
             AgentSystem system,
-            Function<AgentHttpRequest, AgentTaskRequest> taskFactory
+            Function<AgentHttpRequest, GoalRequest> goalFactory
     ) {
-        return new AgentHttpEndpoint(path, system, taskFactory, Mode.ASYNC);
+        return new AgentHttpEndpoint(path, system, goalFactory, Mode.ASYNC);
     }
 
     String path() {
@@ -77,8 +77,8 @@ public final class AgentHttpEndpoint {
         return system;
     }
 
-    AgentTaskRequest taskFor(AgentHttpRequest request) {
-        return taskFactory.apply(request);
+    GoalRequest goalFor(AgentHttpRequest request) {
+        return goalFactory.apply(request);
     }
 
     Mode mode() {

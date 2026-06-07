@@ -43,6 +43,7 @@ public final class SampleTools {
     private SampleTools() {
     }
 
+
     public static AgentToolDefinition definition(String toolName, AppConfig config) {
         return switch (toolName) {
             case TIME_NOW -> timeNow(Clock.systemUTC());

@@ -1,6 +1,6 @@
 package com.example.agent.api;
 
-import com.example.agent.runtime.task.AgentTaskRegistryActor;
+import com.example.agent.runtime.goal.GoalRegistryActor;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Scheduler;
 
@@ -8,25 +8,25 @@ import java.time.Duration;
 import java.util.Objects;
 
 public final class AgentComponentClient {
-    private final ActorRef<AgentTaskRegistryActor.Command> taskRegistry;
+    private final ActorRef<GoalRegistryActor.Command> goalRegistry;
     private final Scheduler scheduler;
     private final Duration defaultTimeout;
 
     AgentComponentClient(
-            ActorRef<AgentTaskRegistryActor.Command> taskRegistry,
+            ActorRef<GoalRegistryActor.Command> goalRegistry,
             Scheduler scheduler,
             Duration defaultTimeout
     ) {
-        this.taskRegistry = Objects.requireNonNull(taskRegistry);
+        this.goalRegistry = Objects.requireNonNull(goalRegistry);
         this.scheduler = Objects.requireNonNull(scheduler);
         this.defaultTimeout = Objects.requireNonNull(defaultTimeout);
     }
 
     public GatewayAgentClient forGatewayAgent(AgentSystem system, String instanceId) {
-        return new GatewayAgentClient(taskRegistry, scheduler, defaultTimeout, system, instanceId);
+        return new GatewayAgentClient(goalRegistry, scheduler, defaultTimeout, system, instanceId);
     }
 
-    public AgentTaskClient forTask(String taskId) {
-        return new AgentTaskClient(taskRegistry, scheduler, defaultTimeout, taskId);
+    public GoalClient forGoal(String goalId) {
+        return new GoalClient(goalRegistry, scheduler, defaultTimeout, goalId);
     }
 }
