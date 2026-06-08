@@ -5,13 +5,15 @@ import com.example.agent.config.PekkoRuntimeConfig;
 import com.example.agent.gateway.GatewayActor;
 import com.example.agent.llm.ChatModelFactory;
 import com.example.agent.llm.LlmWorkerActor;
+import com.example.agent.protocol.AgentError;
 import com.example.agent.protocol.AgentRequest;
+import com.example.agent.protocol.AgentResult;
+import com.example.agent.protocol.AgentStatus;
 import com.example.agent.rag.ingest.LocalCorpusAutoIngestor;
 import com.example.agent.rag.runtime.RagRuntimeActor;
 import com.example.agent.rag.runtime.RagRuntimeComponents;
 import com.example.agent.rag.runtime.RagRuntimeFactory;
-import com.example.agent.runtime.ActorAgentRuntimeService;
-import com.example.agent.runtime.AgentResult;
+import com.example.agent.runtime.PekkoAgentRuntimeInvoker;
 import com.example.agent.runtime.consumer.AgentConsumer;
 import com.example.agent.runtime.consumer.AgentCompletedEvent;
 import com.example.agent.runtime.consumer.AgentConsumerRegistryActor;
@@ -41,20 +43,20 @@ import java.util.concurrent.CompletionStage;
 
 public final class AgentRuntime implements AutoCloseable {
     private final ActorSystem<GatewayActor.Command> actorSystem;
-    private final ActorAgentRuntimeService runtimeService;
+    private final PekkoAgentRuntimeInvoker runtimeInvoker;
     private final ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry;
     private final Duration defaultTimeout;
     private final AgentComponentClient componentClient;
 
     private AgentRuntime(
             ActorSystem<GatewayActor.Command> actorSystem,
-            ActorAgentRuntimeService runtimeService,
+            PekkoAgentRuntimeInvoker runtimeInvoker,
             ActorRef<AgentConsumerRegistryActor.Command> consumerRegistry,
             Duration defaultTimeout,
             AgentComponentClient componentClient
     ) {
         this.actorSystem = actorSystem;
-        this.runtimeService = runtimeService;
+        this.runtimeInvoker = runtimeInvoker;
         this.consumerRegistry = consumerRegistry;
         this.defaultTimeout = defaultTimeout;
         this.componentClient = componentClient;
@@ -89,7 +91,7 @@ public final class AgentRuntime implements AutoCloseable {
                     0L
             ).thenApply(ignored -> validationFailure);
         }
-        return runtimeService.invoke(
+        return runtimeInvoker.invoke(
                 new AgentRequest(requestId, goal.instructions(), resolvedContext.tenantId()),
                 system,
                 timeout
@@ -101,10 +103,10 @@ public final class AgentRuntime implements AutoCloseable {
         if (definition == null) {
             return new AgentResult(
                     requestId,
-                    com.example.agent.runtime.AgentStatus.FAILED_SYSTEM,
+                    AgentStatus.FAILED_SYSTEM,
                     "",
                     java.util.List.of(),
-                    java.util.List.of(new com.example.agent.runtime.AgentError(
+                    java.util.List.of(new AgentError(
                             "unsupported_task",
                             "Goal is not accepted by this agent system: " + goal.name(),
                             false,
@@ -116,10 +118,10 @@ public final class AgentRuntime implements AutoCloseable {
         if (!validation.valid()) {
             return new AgentResult(
                     requestId,
-                    com.example.agent.runtime.AgentStatus.FAILED_SYSTEM,
+                    AgentStatus.FAILED_SYSTEM,
                     "",
                     java.util.List.of(),
-                    java.util.List.of(new com.example.agent.runtime.AgentError(
+                    java.util.List.of(new AgentError(
                             "invalid_task",
                             validation.message(),
                             false,
@@ -326,16 +328,16 @@ public final class AgentRuntime implements AutoCloseable {
                     "pekko-llm-agent-runtime",
                     PekkoRuntimeConfig.forAppConfig(config)
             );
-            ActorAgentRuntimeService runtimeService = new ActorAgentRuntimeService(system, system.scheduler());
+            PekkoAgentRuntimeInvoker runtimeInvoker = new PekkoAgentRuntimeInvoker(system, system.scheduler());
             ActorRef<GoalRegistryActor.Command> taskRegistry = system.systemActorOf(
-                    GoalRegistryActor.create(runtimeService, config.taskRetention(), config.maxRetainedTasks()),
+                    GoalRegistryActor.create(runtimeInvoker, config.taskRetention(), config.maxRetainedTasks()),
                     "agent-task-registry",
                     Props.empty()
             );
 
             return new AgentRuntime(
                     system,
-                    runtimeService,
+                    runtimeInvoker,
                     resolvedConsumers.isEmpty() ? null : consumerRegistryRef.join(),
                     config.workflowTimeout(),
                     new AgentComponentClient(taskRegistry, system.scheduler(), config.workflowTimeout())

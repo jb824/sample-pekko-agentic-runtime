@@ -2,8 +2,8 @@ package com.example.agent.runtime.goal;
 
 import com.example.agent.api.AgentSystem;
 import com.example.agent.protocol.AgentRequest;
-import com.example.agent.runtime.AgentRuntimeService;
-import com.example.agent.runtime.AgentResult;
+import com.example.agent.protocol.AgentResult;
+import com.example.agent.runtime.AgentRuntimeInvoker;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.AbstractBehavior;
@@ -21,20 +21,20 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class GoalRegistryActor extends AbstractBehavior<GoalRegistryActor.Command> {
-    private final AgentRuntimeService runtimeService;
+    private final AgentRuntimeInvoker runtimeInvoker;
     private final Duration taskRetention;
     private final int maxRetainedTasks;
     private final Clock clock;
     private final Map<String, StoredGoal> goals = new HashMap<>();
 
     public static Behavior<Command> create(
-            AgentRuntimeService runtimeService,
+            AgentRuntimeInvoker runtimeInvoker,
             Duration taskRetention,
             int maxRetainedTasks
     ) {
         return Behaviors.setup(context -> new GoalRegistryActor(
                 context,
-                runtimeService,
+                runtimeInvoker,
                 taskRetention,
                 maxRetainedTasks,
                 Clock.systemUTC()
@@ -42,14 +42,14 @@ public final class GoalRegistryActor extends AbstractBehavior<GoalRegistryActor.
     }
 
     static Behavior<Command> create(
-            AgentRuntimeService runtimeService,
+            AgentRuntimeInvoker runtimeInvoker,
             Duration taskRetention,
             int maxRetainedTasks,
             Clock clock
     ) {
         return Behaviors.setup(context -> new GoalRegistryActor(
                 context,
-                runtimeService,
+                runtimeInvoker,
                 taskRetention,
                 maxRetainedTasks,
                 clock
@@ -58,13 +58,13 @@ public final class GoalRegistryActor extends AbstractBehavior<GoalRegistryActor.
 
     private GoalRegistryActor(
             ActorContext<Command> context,
-            AgentRuntimeService runtimeService,
+            AgentRuntimeInvoker runtimeInvoker,
             Duration taskRetention,
             int maxRetainedTasks,
             Clock clock
     ) {
         super(context);
-        this.runtimeService = Objects.requireNonNull(runtimeService);
+        this.runtimeInvoker = Objects.requireNonNull(runtimeInvoker);
         this.taskRetention = Objects.requireNonNull(taskRetention);
         this.maxRetainedTasks = Math.max(1, maxRetainedTasks);
         this.clock = Objects.requireNonNull(clock);
@@ -113,7 +113,7 @@ public final class GoalRegistryActor extends AbstractBehavior<GoalRegistryActor.
         GoalState running = GoalState.running(command.goalId());
         goals.put(command.goalId(), new StoredGoal(running, 0L));
         command.replyTo().tell(running);
-        runtimeService.invoke(
+        runtimeInvoker.invoke(
                 new AgentRequest(command.goalId(), command.input()),
                 command.system(),
                 command.timeout()

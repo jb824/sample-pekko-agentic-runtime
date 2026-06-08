@@ -2,7 +2,7 @@ package com.example.agent.adapter.grpc;
 
 import com.example.agent.api.AgentSystem;
 import com.example.agent.api.GoalRequest;
-import com.example.agent.runtime.AgentResult;
+import com.example.agent.protocol.AgentResult;
 import com.example.agent.runtime.grpc.AgentRuntime;
 import com.example.agent.runtime.grpc.Error;
 import com.example.agent.runtime.grpc.HealthRequest;

@@ -50,7 +50,7 @@ final class AgentRuntimeConsumerIntegrationTest {
             assertEquals("tenant-a", observed.get().tenantId());
             assertEquals("gateway", observed.get().gatewayName());
             assertEquals("hello", observed.get().originalInput());
-            assertEquals(com.example.agent.runtime.AgentStatus.COMPLETED, observed.get().status());
+            assertEquals(com.example.agent.protocol.AgentStatus.COMPLETED, observed.get().status());
         }
     }
 
@@ -75,11 +75,11 @@ final class AgentRuntimeConsumerIntegrationTest {
                     .toCompletableFuture()
                     .join();
 
-            assertEquals(com.example.agent.runtime.AgentStatus.FAILED_SYSTEM, result.status());
+            assertEquals(com.example.agent.protocol.AgentStatus.FAILED_SYSTEM, result.status());
             assertTrue(delivered.await(2, TimeUnit.SECONDS));
             assertEquals("request-invalid", observed.get().requestId());
             assertEquals("bad", observed.get().originalInput());
-            assertEquals(com.example.agent.runtime.AgentStatus.FAILED_SYSTEM, observed.get().status());
+            assertEquals(com.example.agent.protocol.AgentStatus.FAILED_SYSTEM, observed.get().status());
         }
     }
 
@@ -103,7 +103,7 @@ final class AgentRuntimeConsumerIntegrationTest {
             Thread.sleep(50L);
             assertFalse(result.isDone());
 
-            assertEquals(com.example.agent.runtime.AgentStatus.FAILED_SYSTEM, result.join().status());
+            assertEquals(com.example.agent.protocol.AgentStatus.FAILED_SYSTEM, result.join().status());
             assertTrue(processed.get());
         }
     }

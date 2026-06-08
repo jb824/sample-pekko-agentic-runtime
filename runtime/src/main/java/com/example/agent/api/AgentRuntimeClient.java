@@ -1,6 +1,6 @@
 package com.example.agent.api;
 
-import com.example.agent.runtime.AgentResult;
+import com.example.agent.protocol.AgentResult;
 import com.example.agent.config.AppConfig;
 import com.example.agent.runtime.consumer.AgentConsumer;
 

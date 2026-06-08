@@ -1,5 +1,6 @@
 package com.example.agent.runtime;
 
+// Internal behavior decision messages for experimental agent planning loops.
 public final class AgentBehaviorProtocol {
     private AgentBehaviorProtocol() {
     }

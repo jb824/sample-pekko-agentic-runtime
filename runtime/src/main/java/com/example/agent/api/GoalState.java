@@ -1,6 +1,6 @@
 package com.example.agent.api;
 
-import com.example.agent.runtime.AgentResult;
+import com.example.agent.protocol.AgentResult;
 
 public record GoalState(
         String goalId,

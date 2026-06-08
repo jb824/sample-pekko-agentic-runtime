@@ -2,8 +2,8 @@ package com.example.agent.api;
 
 import com.example.agent.config.AppConfig;
 import com.example.agent.http.AgentHttpServer;
-import com.example.agent.runtime.AgentError;
-import com.example.agent.runtime.AgentResult;
+import com.example.agent.protocol.AgentError;
+import com.example.agent.protocol.AgentResult;
 import com.example.agent.runtime.consumer.AgentConsumer;
 
 import java.time.Duration;

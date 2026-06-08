@@ -1,6 +1,6 @@
 package com.example.agent;
 
-import com.example.agent.runtime.AgentStatus;
+import com.example.agent.protocol.AgentStatus;
 import com.example.agent.runtime.consumer.AgentCompletedEvent;
 import com.example.agent.runtime.consumer.ConsumerEffect;
 import dev.langchain4j.model.chat.ChatModel;

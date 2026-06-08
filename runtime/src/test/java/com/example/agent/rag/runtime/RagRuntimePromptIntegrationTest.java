@@ -94,7 +94,33 @@ final class RagRuntimePromptIntegrationTest {
         assertTrue(delegatePrompt.contains("- Retrieved knowledge:\nNone."));
     }
 
-    private static com.example.agent.runtime.AgentResult run(
+    @Test
+    void agentCanRequestAdditionalRagDuringStep() {
+        ScriptedModel model = new ScriptedModel(
+                """
+                        RAG:
+                        query: agent-specific fact
+                        topK: 2
+                        """,
+                "FINAL: used agent-specific RAG"
+        );
+        CountingRetriever retriever = new CountingRetriever(new RagRetrievalResult(List.of(chunk("tenant-a", "doc-2", "file://doc-2"))));
+
+        var result = run(model, retriever, false, agentRagSystem(), "agent-specific question");
+
+        assertTrue(result.isSuccess());
+        assertEquals(1, retriever.calls());
+        assertEquals("agent-specific fact", retriever.lastQuery());
+        assertTrue(result.sources().contains("file://doc-2"));
+        String agentPrompt = model.prompts().stream()
+                .filter(prompt -> prompt.contains("You are agent \"assistant\""))
+                .reduce((first, second) -> second)
+                .orElseThrow();
+        assertTrue(agentPrompt.contains("- Agent-requested retrieved knowledge:"));
+        assertTrue(agentPrompt.contains("retrieved fact"));
+    }
+
+    private static com.example.agent.protocol.AgentResult run(
             CapturingModel model,
             CountingRetriever retriever,
             boolean ragEnabled,
@@ -109,7 +135,21 @@ final class RagRuntimePromptIntegrationTest {
         }
     }
 
-    private static AgentRuntime runtime(CapturingModel model, RagRetriever retriever, boolean ragEnabled) {
+    private static com.example.agent.protocol.AgentResult run(
+            ChatModel model,
+            CountingRetriever retriever,
+            boolean ragEnabled,
+            AgentSystem system,
+            String input
+    ) {
+        try (AgentRuntime runtime = runtime(model, retriever, ragEnabled)) {
+            return runtime.run(AgentRunContext.tenant("tenant-a"), "request-1", system, task(input), Duration.ofSeconds(5))
+                    .toCompletableFuture()
+                    .join();
+        }
+    }
+
+    private static AgentRuntime runtime(ChatModel model, RagRetriever retriever, boolean ragEnabled) {
         return AgentRuntime.builder()
                 .chatModel(model)
                 .ragRuntimeComponents(new RagRuntimeComponents(retriever, new NoopIndexer()))
@@ -122,6 +162,15 @@ final class RagRuntimePromptIntegrationTest {
         Agent assistant = Agent.named("assistant").instructedBy("Answer.").build();
         GatewayAgent gateway = GatewayAgent.named("gateway")
                 .accepts(Goal.of("agent.request").maxIterations(1).build())
+                .delegatesTo(assistant)
+                .build();
+        return AgentSystem.builder().entrypoint(gateway).agent(assistant).build();
+    }
+
+    private static AgentSystem agentRagSystem() {
+        Agent assistant = Agent.named("assistant").instructedBy("Use RAG if needed.").build();
+        GatewayAgent gateway = GatewayAgent.named("gateway")
+                .accepts(Goal.of("agent.request").maxIterations(3).build())
                 .delegatesTo(assistant)
                 .build();
         return AgentSystem.builder().entrypoint(gateway).agent(assistant).build();
@@ -157,11 +206,33 @@ final class RagRuntimePromptIntegrationTest {
         }
     }
 
+    private static final class ScriptedModel implements ChatModel {
+        private final List<String> responses;
+        private final List<String> prompts = new CopyOnWriteArrayList<>();
+        private final AtomicInteger index = new AtomicInteger();
+
+        private ScriptedModel(String... responses) {
+            this.responses = List.of(responses);
+        }
+
+        @Override
+        public String chat(String prompt) {
+            prompts.add(prompt);
+            int next = index.getAndIncrement();
+            return responses.get(Math.min(next, responses.size() - 1));
+        }
+
+        List<String> prompts() {
+            return prompts;
+        }
+    }
+
     private static final class CountingRetriever implements RagRetriever {
         private final RagRetrievalResult result;
         private final RuntimeException failure;
         private int calls;
         private String lastTenant = "";
+        private String lastQuery = "";
 
         private CountingRetriever(RagRetrievalResult result) {
             this.result = result;
@@ -177,6 +248,7 @@ final class RagRuntimePromptIntegrationTest {
         public CompletionStage<RagRetrievalResult> retrieve(String query, RagSecurityContext securityContext, int topK) {
             calls++;
             lastTenant = securityContext.tenantId();
+            lastQuery = query;
             if (failure != null) {
                 return CompletableFuture.failedFuture(failure);
             }
@@ -189,6 +261,10 @@ final class RagRuntimePromptIntegrationTest {
 
         String lastTenant() {
             return lastTenant;
+        }
+
+        String lastQuery() {
+            return lastQuery;
         }
     }
 

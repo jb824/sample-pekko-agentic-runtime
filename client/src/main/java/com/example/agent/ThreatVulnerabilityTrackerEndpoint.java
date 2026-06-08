@@ -7,7 +7,7 @@ import com.example.agent.api.http.Get;
 import com.example.agent.api.http.HttpEndpoint;
 import com.example.agent.api.http.Post;
 import com.example.agent.api.http.RolesAllowed;
-import com.example.agent.runtime.AgentResult;
+import com.example.agent.protocol.AgentResult;
 
 import java.time.Duration;
 import java.util.Objects;

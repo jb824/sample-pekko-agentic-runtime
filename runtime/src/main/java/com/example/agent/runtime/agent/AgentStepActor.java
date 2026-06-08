@@ -6,7 +6,10 @@ import com.example.agent.api.GoalDefinition;
 import com.example.agent.api.AgentToolDefinition;
 import com.example.agent.llm.LlmProtocol;
 import com.example.agent.protocol.AgentRequest;
-import com.example.agent.runtime.AgentError;
+import com.example.agent.protocol.AgentError;
+import com.example.agent.rag.core.RagContextBuilder;
+import com.example.agent.rag.core.RagSecurityContext;
+import com.example.agent.rag.runtime.RagProtocol;
 import com.example.agent.runtime.memory.AgentMemoryEvent;
 import com.example.agent.runtime.memory.AgentMemoryEventType;
 import com.example.agent.runtime.memory.AgentMemoryKey;
@@ -33,6 +36,7 @@ import java.util.stream.Collectors;
 public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Command> {
     private final ActorRef<LlmProtocol.Command> llmWorker;
     private final ActorRef<ToolProtocol.Command> toolRegistry;
+    private final ActorRef<RagProtocol.Command> ragRuntime;
     private final ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry;
     private final AgentRequest request;
     private final String gatewayName;
@@ -42,18 +46,22 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
     private final String stepInput;
     private final String retrievedKnowledgeContext;
     private final List<AgentToolDefinition> toolDefinitions;
+    private final int ragTopK;
     private final Duration toolTimeout;
     private final PromptBudget promptBudget;
     private final ActorRef<Result> replyTo;
     private final List<ToolObservation> observations = new ArrayList<>();
+    private final List<String> agentRetrievedContexts = new ArrayList<>();
     private final List<String> sources = new ArrayList<>();
     private List<AgentMemoryEvent> recalledMemory = List.of();
     private int iteration;
     private ToolCallParser.ToolCall pendingTool;
+    private RagCallParser.RagCall pendingRag;
 
     public static Behavior<Command> create(
             ActorRef<LlmProtocol.Command> llmWorker,
             ActorRef<ToolProtocol.Command> toolRegistry,
+            ActorRef<RagProtocol.Command> ragRuntime,
             ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry,
             AgentRequest request,
             String gatewayName,
@@ -63,6 +71,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
             String stepInput,
             String retrievedKnowledgeContext,
             List<AgentToolDefinition> toolDefinitions,
+            int ragTopK,
             Duration toolTimeout,
             PromptBudget promptBudget,
             ActorRef<Result> replyTo
@@ -71,6 +80,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 context,
                 llmWorker,
                 toolRegistry,
+                ragRuntime,
                 memoryRegistry,
                 request,
                 gatewayName,
@@ -80,6 +90,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 stepInput,
                 retrievedKnowledgeContext,
                 toolDefinitions,
+                ragTopK,
                 toolTimeout,
                 promptBudget,
                 replyTo
@@ -90,6 +101,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
             ActorContext<Command> context,
             ActorRef<LlmProtocol.Command> llmWorker,
             ActorRef<ToolProtocol.Command> toolRegistry,
+            ActorRef<RagProtocol.Command> ragRuntime,
             ActorRef<AgentMemoryRegistryActor.Command> memoryRegistry,
             AgentRequest request,
             String gatewayName,
@@ -99,6 +111,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
             String stepInput,
             String retrievedKnowledgeContext,
             List<AgentToolDefinition> toolDefinitions,
+            int ragTopK,
             Duration toolTimeout,
             PromptBudget promptBudget,
             ActorRef<Result> replyTo
@@ -106,6 +119,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
         super(context);
         this.llmWorker = Objects.requireNonNull(llmWorker);
         this.toolRegistry = Objects.requireNonNull(toolRegistry);
+        this.ragRuntime = Objects.requireNonNull(ragRuntime);
         this.memoryRegistry = Objects.requireNonNull(memoryRegistry);
         this.request = Objects.requireNonNull(request);
         this.gatewayName = Objects.requireNonNull(gatewayName);
@@ -117,12 +131,13 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 ? "None."
                 : retrievedKnowledgeContext;
         this.toolDefinitions = toolDefinitions == null ? List.of() : List.copyOf(toolDefinitions);
+        this.ragTopK = Math.max(1, ragTopK);
         this.toolTimeout = Objects.requireNonNull(toolTimeout);
         this.promptBudget = promptBudget == null ? PromptBudget.disabled() : promptBudget;
         this.replyTo = Objects.requireNonNull(replyTo);
     }
 
-    public sealed interface Command permits Start, WrappedMemoryRecall, WrappedLlmResponse, WrappedToolResult, ToolTimeout {
+    public sealed interface Command permits Start, WrappedMemoryRecall, WrappedLlmResponse, WrappedToolResult, WrappedAgentRagResult, ToolTimeout {
     }
 
     public record Start() implements Command {
@@ -135,6 +150,9 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
     }
 
     private record WrappedToolResult(ToolProtocol.ToolResult result) implements Command {
+    }
+
+    private record WrappedAgentRagResult(RagProtocol.Retrieved retrieved) implements Command {
     }
 
     private record ToolTimeout(String toolName, int iteration) implements Command {
@@ -158,6 +176,7 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 .onMessage(WrappedMemoryRecall.class, this::onWrappedMemoryRecall)
                 .onMessage(WrappedLlmResponse.class, this::onWrappedLlmResponse)
                 .onMessage(WrappedToolResult.class, this::onWrappedToolResult)
+                .onMessage(WrappedAgentRagResult.class, this::onWrappedAgentRagResult)
                 .onMessage(ToolTimeout.class, this::onToolTimeout)
                 .build();
     }
@@ -218,6 +237,10 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
         }
         String text = wrapped.response().text();
         Optional<ToolCallParser.ToolCall> toolCall = ToolCallParser.parse(text);
+        Optional<RagCallParser.RagCall> ragCall = RagCallParser.parse(text);
+        if (ragCall.isPresent()) {
+            return requestAgentRag(ragCall.get());
+        }
         if (toolCall.isEmpty()) {
             String output = ToolCallParser.finalText(text);
             return finishSuccess(output);
@@ -271,6 +294,60 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 adapter
         ));
         return this;
+    }
+
+    private Behavior<Command> requestAgentRag(RagCallParser.RagCall ragCall) {
+        if (iteration + 1 >= task.maxIterations()) {
+            remember(AgentMemoryEventType.USER_TASK, originalInput);
+            remember(AgentMemoryEventType.FAILURE, "RAG requested after iteration budget was exhausted.");
+            return finishFailure(
+                    "agent_iterations_exhausted",
+                    "Agent requested RAG after max iterations.",
+                    true
+            );
+        }
+        pendingRag = ragCall;
+        getContext().getLog().info(
+                "Agent dispatching RAG request_id={} tenant={} agent={} iteration={} query_chars={}",
+                request.requestId(),
+                request.tenantId(),
+                agentLoggerName(agent.name()),
+                iteration + 1,
+                ragCall.query().length()
+        );
+        ActorRef<RagProtocol.Retrieved> adapter = getContext().messageAdapter(
+                RagProtocol.Retrieved.class,
+                WrappedAgentRagResult::new
+        );
+        ragRuntime.tell(new RagProtocol.Retrieve(
+                request.requestId() + ":agent:" + agent.name() + ":rag:" + iteration,
+                ragCall.query(),
+                new RagSecurityContext(request.tenantId(), "", Map.of()),
+                Math.min(ragCall.topK(), ragTopK),
+                adapter
+        ));
+        return this;
+    }
+
+    private Behavior<Command> onWrappedAgentRagResult(WrappedAgentRagResult wrapped) {
+        if (pendingRag == null) {
+            return this;
+        }
+        if (wrapped.retrieved().isSuccess() && wrapped.retrieved().result() != null) {
+            var result = wrapped.retrieved().result();
+            String context = new RagContextBuilder(Math.max(512, promptBudget.maxPromptChars() / 3)).build(result);
+            agentRetrievedContexts.add(context);
+            result.chunks().stream()
+                    .map(chunk -> chunk.citation())
+                    .filter(citation -> citation != null && !citation.isBlank())
+                    .forEach(sources::add);
+            remember(AgentMemoryEventType.TOOL_OBSERVATION, "RAG retrieved context for query: " + pendingRag.query());
+        } else {
+            remember(AgentMemoryEventType.TOOL_OBSERVATION, "RAG retrieval failed for query: " + pendingRag.query());
+        }
+        pendingRag = null;
+        iteration++;
+        return requestLlm();
     }
 
     private Behavior<Command> onWrappedToolResult(WrappedToolResult wrapped) {
@@ -367,17 +444,25 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 - Retrieved knowledge:
                 %s
 
+                - Agent-requested retrieved knowledge:
+                %s
+
                 - Tool observations from this agent:
                 %s
 
                 Available tools:
                 %s
 
+                If you need more retrieved knowledge, respond exactly:
+                RAG:
+                query: search query
+                topK: 3
+
                 If you need a tool, respond exactly:
                 TOOL: tool.name
                 ARG key=value
 
-                Respond with either TOOL or FINAL, never both.
+                Respond with exactly one of RAG, TOOL, or FINAL.
                 After observing a tool result, answer with FINAL using the observation unless a different tool is required.
 
                 If you can answer, respond with:
@@ -391,9 +476,18 @@ public final class AgentStepActor extends AbstractBehavior<AgentStepActor.Comman
                 safe(task.description()),
                 memorySection(),
                 retrievedKnowledgeContext,
+                agentRetrievedKnowledgeSection(),
                 observationsSection(),
                 toolsSection()
         );
+    }
+
+    private String agentRetrievedKnowledgeSection() {
+        if (agentRetrievedContexts.isEmpty()) {
+            return "None.";
+        }
+        int maxChars = Math.max(512, promptBudget.maxPromptChars() / 3);
+        return PromptCompactor.fitSections(agentRetrievedContexts, maxChars);
     }
 
     private boolean shouldRecall() {

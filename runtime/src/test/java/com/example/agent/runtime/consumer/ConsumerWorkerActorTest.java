@@ -167,7 +167,7 @@ final class ConsumerWorkerActorTest {
                 "gateway",
                 "input",
                 "output",
-                com.example.agent.runtime.AgentStatus.COMPLETED,
+                com.example.agent.protocol.AgentStatus.COMPLETED,
                 List.of(),
                 10L,
                 Instant.now()

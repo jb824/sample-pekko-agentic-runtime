@@ -2,11 +2,11 @@ package com.example.agent.gateway;
 
 import com.example.agent.api.AgentSystem;
 import com.example.agent.llm.LlmProtocol;
+import com.example.agent.protocol.AgentError;
 import com.example.agent.protocol.AgentRequest;
-import com.example.agent.runtime.AgentError;
-import com.example.agent.runtime.AgentResult;
-import com.example.agent.runtime.AgentStatus;
-import com.example.agent.runtime.agent.DefaultAgentSystemExecutorActor;
+import com.example.agent.protocol.AgentResult;
+import com.example.agent.protocol.AgentStatus;
+import com.example.agent.runtime.agent.AgentRunCoordinatorActor;
 import com.example.agent.runtime.agent.PromptBudget;
 import com.example.agent.runtime.consumer.AgentConsumerRegistryActor;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
@@ -165,8 +165,8 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
             ));
             return this;
         }
-        ActorRef<DefaultAgentSystemExecutorActor.Command> executor = getContext().spawn(
-                DefaultAgentSystemExecutorActor.create(
+        ActorRef<AgentRunCoordinatorActor.Command> executor = getContext().spawn(
+                AgentRunCoordinatorActor.create(
                         llmWorker,
                         toolRegistry,
                         memoryRegistry,
@@ -183,7 +183,7 @@ public final class GatewayActor extends AbstractBehavior<GatewayActor.Command> {
         );
         inFlightRequests++;
         getContext().watchWith(executor, new ExecutorStopped(command.request().requestId()));
-        executor.tell(new DefaultAgentSystemExecutorActor.Start(command.request(), command.agentSystem(), command.replyTo()));
+        executor.tell(new AgentRunCoordinatorActor.Start(command.request(), command.agentSystem(), command.replyTo()));
         return this;
     }
 

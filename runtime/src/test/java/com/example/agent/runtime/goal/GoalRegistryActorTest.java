@@ -5,9 +5,9 @@ import com.example.agent.api.AgentSystem;
 import com.example.agent.api.GoalDefinition;
 import com.example.agent.api.GatewayAgent;
 import com.example.agent.protocol.AgentRequest;
-import com.example.agent.runtime.AgentRuntimeService;
-import com.example.agent.runtime.AgentResult;
-import com.example.agent.runtime.AgentStatus;
+import com.example.agent.protocol.AgentResult;
+import com.example.agent.protocol.AgentStatus;
+import com.example.agent.runtime.AgentRuntimeInvoker;
 import org.apache.pekko.actor.typed.ActorRef;
 import org.apache.pekko.actor.typed.ActorSystem;
 import org.apache.pekko.actor.typed.Props;
@@ -51,7 +51,7 @@ final class GoalRegistryActorTest {
         MutableClock clock = new MutableClock();
         ActorRef<GoalRegistryActor.Command> registry = system.systemActorOf(
                 GoalRegistryActor.create(
-                        completedRuntimeService(),
+                completedRuntimeInvoker(),
                         Duration.ofSeconds(5),
                         10,
                         clock
@@ -74,7 +74,7 @@ final class GoalRegistryActorTest {
         MutableClock clock = new MutableClock();
         ActorRef<GoalRegistryActor.Command> registry = system.systemActorOf(
                 GoalRegistryActor.create(
-                        completedRuntimeService(),
+                completedRuntimeInvoker(),
                         Duration.ofHours(1),
                         2,
                         clock
@@ -99,8 +99,8 @@ final class GoalRegistryActorTest {
         assertEquals(GoalStatus.COMPLETED, getTask(registry, "task-3").status());
     }
 
-    private AgentRuntimeService completedRuntimeService() {
-        return new AgentRuntimeService() {
+    private AgentRuntimeInvoker completedRuntimeInvoker() {
+        return new AgentRuntimeInvoker() {
             @Override
             public CompletionStage<AgentResult> invoke(AgentRequest request, AgentSystem agentSystem, Duration timeout) {
                 return completed(request.requestId());

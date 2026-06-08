@@ -1,4 +1,4 @@
-package com.example.agent.runtime;
+package com.example.agent.protocol;
 
 public record AgentError(
         String code,

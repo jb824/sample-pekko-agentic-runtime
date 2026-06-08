@@ -14,16 +14,16 @@ import com.example.agent.gateway.GatewayActor;
 import com.example.agent.llm.ChatModelFactory;
 import com.example.agent.llm.LlmProtocol;
 import com.example.agent.llm.LlmWorkerActor;
+import com.example.agent.protocol.AgentError;
 import com.example.agent.protocol.AgentRequest;
+import com.example.agent.protocol.AgentResult;
+import com.example.agent.protocol.AgentStatus;
 import com.example.agent.rag.ingest.LocalCorpusAutoIngestor;
 import com.example.agent.rag.runtime.RagProtocol;
 import com.example.agent.rag.runtime.RagRuntimeActor;
 import com.example.agent.rag.runtime.RagRuntimeComponents;
 import com.example.agent.rag.runtime.RagRuntimeFactory;
-import com.example.agent.runtime.ActorAgentRuntimeService;
-import com.example.agent.runtime.AgentError;
-import com.example.agent.runtime.AgentResult;
-import com.example.agent.runtime.AgentRuntimeService;
+import com.example.agent.runtime.PekkoAgentRuntimeInvoker;
 import com.example.agent.runtime.memory.AgentMemoryRegistryActor;
 import com.example.agent.runtime.memory.InMemoryAgentMemoryStore;
 import com.example.agent.runtime.goal.GoalRegistryActor;
@@ -113,7 +113,7 @@ public final class Main {
             Map<String, Long> startTimes = new HashMap<>();
             long runStarted = System.nanoTime();
             String requestGroupId = UUID.randomUUID().toString();
-            ActorAgentRuntimeService runtimeService = new ActorAgentRuntimeService(gateway, context.getSystem().scheduler());
+            PekkoAgentRuntimeInvoker runtimeInvoker = new PekkoAgentRuntimeInvoker(gateway, context.getSystem().scheduler());
 
             for (int i = 1; i <= config.requestCount(); i++) {
                 String requestId = config.requestCount() == 1 ? requestGroupId : requestGroupId + "-" + i;
@@ -125,12 +125,12 @@ public final class Main {
                         requestId,
                         config.llmBackend()
                 );
-                runtimeService.invoke(request, defaultSystem, config.workflowTimeout())
+                runtimeInvoker.invoke(request, defaultSystem, config.workflowTimeout())
                         .whenComplete((result, failure) -> {
                             if (failure != null) {
                                 context.getSelf().tell(new AgentResult(
                                         requestId,
-                                        com.example.agent.runtime.AgentStatus.FAILED_SYSTEM,
+                                        AgentStatus.FAILED_SYSTEM,
                                         "",
                                         java.util.List.of(),
                                         java.util.List.of(new AgentError("runtime_invoke_failure", failure.getMessage(), true, "runtime"))

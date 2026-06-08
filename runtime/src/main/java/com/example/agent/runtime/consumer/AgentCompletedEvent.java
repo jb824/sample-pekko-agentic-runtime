@@ -1,6 +1,6 @@
 package com.example.agent.runtime.consumer;
 
-import com.example.agent.runtime.AgentStatus;
+import com.example.agent.protocol.AgentStatus;
 
 import java.time.Instant;
 import java.util.List;

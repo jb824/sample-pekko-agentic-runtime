@@ -11,8 +11,8 @@ import com.example.agent.api.AgentToolDefinition;
 import com.example.agent.api.AgentToolResult;
 import com.example.agent.api.Tool;
 import com.example.agent.api.GatewayAgent;
-import com.example.agent.runtime.AgentResult;
-import com.example.agent.runtime.AgentStatus;
+import com.example.agent.protocol.AgentResult;
+import com.example.agent.protocol.AgentStatus;
 import dev.langchain4j.model.chat.ChatModel;
 import org.junit.jupiter.api.Test;
 
